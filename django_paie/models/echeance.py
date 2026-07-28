@@ -166,6 +166,16 @@ class PaiementSalarial(models.Model):
     def save(self, *args, **kwargs):
         with transaction.atomic():
             echeance = EcheanceSalariale.objects.select_for_update().get(pk=self.echeance_id)
+            from .periode import PeriodePaie
+            if echeance.date_cloture or PeriodePaie.objects.filter(
+                mois=echeance.mois,
+                annee=echeance.annee,
+                entreprise_id=echeance.entreprise_id,
+                est_cloturee=True,
+            ).exists():
+                raise ValueError(
+                    "Une période clôturée ne peut recevoir aucune modification de paiement."
+                )
             super().save(*args, **kwargs)
             self._recalculer_echeance()
 
@@ -181,5 +191,15 @@ class PaiementSalarial(models.Model):
     def annuler(self):
         with transaction.atomic():
             echeance = EcheanceSalariale.objects.select_for_update().get(pk=self.echeance_id)
+            from .periode import PeriodePaie
+            if echeance.date_cloture or PeriodePaie.objects.filter(
+                mois=echeance.mois,
+                annee=echeance.annee,
+                entreprise_id=echeance.entreprise_id,
+                est_cloturee=True,
+            ).exists():
+                raise ValueError(
+                    "Un paiement d'une période clôturée ne peut pas être annulé."
+                )
             self.statut = "ANNULE"
             self.save(update_fields=["statut"])

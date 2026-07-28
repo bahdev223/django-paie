@@ -5,6 +5,7 @@ from django import forms
 from django.urls import reverse_lazy
 from django.shortcuts import redirect
 from django.contrib.auth.mixins import PermissionRequiredMixin
+from django.core.exceptions import PermissionDenied
 from .models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from .services import ModeSimpleService, StatistiquesPaieService
 from .conf import paie_settings
@@ -13,7 +14,12 @@ from .conf import paie_settings
 class EnterpriseFilterMixin:
     def get_entreprise_id(self):
         if paie_settings.MODE_PAR_ENTREPRISE:
-            return getattr(self.request.user, "entreprise_id", "")
+            entreprise_id = getattr(self.request.user, "entreprise_id", "")
+            if not entreprise_id:
+                raise PermissionDenied(
+                    "Aucune entreprise associée à cet utilisateur."
+                )
+            return str(entreprise_id)
         return ""
 
     def get_queryset(self):
@@ -122,13 +128,13 @@ class PaiementCreateView(PermissionRequiredMixin, EnterpriseFilterMixin, FormVie
         return redirect(self.success_url)
 
 
-class DashboardView(PermissionRequiredMixin, TemplateView):
+class DashboardView(PermissionRequiredMixin, EnterpriseFilterMixin, TemplateView):
     template_name = "django_paie/dashboard.html"
     permission_required = "django_paie.view_echeancesalariale"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        entreprise_id = getattr(self.request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
+        entreprise_id = self.get_entreprise_id()
 
         stats = StatistiquesPaieService(entreprise_id=entreprise_id)
         annee = self.request.GET.get("annee") or None

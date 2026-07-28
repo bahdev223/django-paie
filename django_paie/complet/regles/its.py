@@ -16,6 +16,27 @@ class ReglesITS:
         (None, Decimal("0.30")),
     ]
 
+    def __init__(self, parametres=None):
+        parametres = parametres or {}
+        self.ABATTEMENT_FORFAITAIRE = Decimal(
+            str(parametres.get("abattement_forfaitaire", self.ABATTEMENT_FORFAITAIRE))
+        )
+        self.DECOTE_SEUIL = Decimal(
+            str(parametres.get("decote_seuil", self.DECOTE_SEUIL))
+        )
+        self.DECOTE_MONTANT = Decimal(
+            str(parametres.get("decote_montant", self.DECOTE_MONTANT))
+        )
+        baremes = parametres.get("baremes")
+        if baremes:
+            self.BAREMES = [
+                (
+                    Decimal(str(item["seuil"])) if item.get("seuil") is not None else None,
+                    Decimal(str(item["taux"])),
+                )
+                for item in baremes
+            ]
+
     def calculer_impot(self, salaire_imposable):
         base = Decimal(str(salaire_imposable))
         abattement = (base * self.ABATTEMENT_FORFAITAIRE).quantize(Decimal("1"))

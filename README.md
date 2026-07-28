@@ -13,6 +13,9 @@ INSTALLED_APPS = [
 DJANGO_PAIE = {
     "MODE": "SIMPLE",
     "EMPLOYE_MODEL": "mon_app.Employe",
+    "CONTRAT_MODEL": "mon_app.Contrat",
+    "ABSENCE_MODEL": "mon_app.Absence",
+    "RH_ADAPTER": "mon_projet.paie.MonRHAdapter",
     "DEVISE": "XOF",
 }
 ```
@@ -30,7 +33,14 @@ DJANGO_PAIE = {
 ### Mode COMPLET
 
 - Rubriques de paie paramétrables
+- Variables mensuelles : primes, indemnités, heures supplémentaires, avantages,
+  absences, prêts/avances, retenues, rappels, congés et régularisations
+- Règles légales versionnées par pays, organisme, entreprise et dates d'effet
 - Calcul automatique CNSS, AMO, ITS (barèmes Mali)
 - Bulletins détaillés
 - Cotisations salariales et patronales
 - Exports PDF et Excel
+
+En mode multi-entreprise, l'utilisateur et l'employé doivent tous les deux porter
+le champ configuré par `EMPLOYE_ENTREPRISE_FIELD` (par défaut `entreprise_id`).
+Un rattachement absent ou différent entraîne un refus d'accès.

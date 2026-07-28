@@ -1,12 +1,17 @@
 from datetime import date
 from decimal import Decimal
 from django.db.models import Sum, Count, Q
+from django.core.exceptions import PermissionDenied
 from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from ..conf import paie_settings
 
 
 class StatistiquesPaieService:
     def __init__(self, entreprise_id=""):
+        if paie_settings.MODE_PAR_ENTREPRISE and not entreprise_id:
+            raise PermissionDenied(
+                "Aucune entreprise fournie pour les statistiques de paie."
+            )
         self.entreprise_id = entreprise_id
 
     def _base_qs(self):

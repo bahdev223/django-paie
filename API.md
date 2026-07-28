@@ -13,7 +13,8 @@ Permissions requises :
 | `django_paie.add_echeancesalariale` | POST echeances |
 | `django_paie.view_paiementsalarial` | GET paiements |
 | `django_paie.add_paiementsalarial` | POST paiements, avance |
-| `django_paie.change_paiementsalarial` | POST annuler paiement |
+| `django_paie.annuler_paiement` | POST annuler paiement |
+| `django_paie.cloturer_periode` | POST clôturer une période |
 | `django_paie.add_bulletinpaie` | POST bulletins/calculer, masse/calculer |
 
 ---
@@ -139,13 +140,15 @@ Enregistrer une avance sur salaire.
   "montant": 20000,
   "date_paiement": "2026-07-10",
   "periode_cible": "10/2026",
+  "montant_mensuel": 50000,
   "notes": ""
 }
 ```
 
 - `periode_source` : période où le paiement est effectué.
 - `periode_cible` : période concernée par l'avance (optionnelle, défaut : mois suivant).
-- Le salaire de la période cible est celui de l'échéance source.
+- Le salaire de la période cible vient de l'échéance source ou d'une échéance
+  antérieure. À défaut, `montant_mensuel` est obligatoire.
 
 ---
 
@@ -173,6 +176,12 @@ Calculer et enregistrer un bulletin.
 ```
 
 Retourne le bulletin complet avec lignes et cotisations.
+
+Le calcul utilise la ligne `VariablePaieMensuelle` de l'employé et de la période :
+primes, indemnités, heures supplémentaires et majoration, avantages en nature,
+absences, prêts/avances récupérables, retenues personnalisées, rappels, congés,
+régularisations et rubriques supplémentaires. Les règles `ReglePaie` applicables
+à la date du bulletin sont utilisées pour CNSS, AMO et ITS.
 
 ### `POST /api/masse/calculer/`
 

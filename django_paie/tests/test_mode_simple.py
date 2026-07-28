@@ -2,7 +2,9 @@ import json
 from datetime import date
 from decimal import Decimal
 from django.test import TestCase
+from django.test import override_settings
 from django.contrib.auth.models import User
+from django.core.exceptions import PermissionDenied
 from django.contrib.contenttypes.models import ContentType
 from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from ..services import ModeSimpleService
@@ -151,6 +153,34 @@ class ModeSimpleServiceTest(TestCase):
         with self.assertRaises(ValueError):
             self.service.creer_echeance(self.employe, "07/2026", 60000)
 
+    def test_paiement_periode_close_refuse(self):
+        echeance = self.service.creer_echeance(self.employe, "07/2026", 50000)
+        periode = PeriodePaie.from_libelle("07/2026")
+        periode.est_cloturee = True
+        periode.save(update_fields=["est_cloturee"])
+        with self.assertRaises(ValueError):
+            self.service.enregistrer_paiement(echeance.id, 10000)
+
+    def test_avance_sans_salaire_reference_refusee(self):
+        with self.assertRaisesRegex(ValueError, "salaire de référence"):
+            self.service.enregistrer_paiement(
+                employe=self.employe,
+                periode="07/2026",
+                montant=20000,
+                type_paiement="AVANCE",
+            )
+
+    def test_avance_accepte_montant_mensuel_explicite(self):
+        paiement = self.service.enregistrer_paiement(
+            employe=self.employe,
+            periode="07/2026",
+            montant=20000,
+            montant_mensuel=50000,
+            type_paiement="AVANCE",
+        )
+        self.assertEqual(paiement.echeance.montant_net, 50000)
+        self.assertEqual(paiement.echeance.reste_a_payer, 30000)
+
     def test_isolation_multi_entreprise(self):
         service_b = ModeSimpleService(entreprise_id="ENT-B")
         e_a = self.service.creer_echeance(self.employe, "07/2026", 50000)
@@ -248,6 +278,23 @@ class APITest(TestCase):
         self.assertEqual(response.status_code, 201)
         data = json.loads(response.content)
         self.assertEqual(data["data"]["montant"], 50000)
+
+    def test_api_refuse_utilisateur_sans_permission(self):
+        from ..api.views import EcheanceListAPI
+        request = self._api_request("GET", "/api/echeances/")
+        self.employe.is_superuser = False
+        self.employe.save(update_fields=["is_superuser"])
+        with self.assertRaises(PermissionDenied):
+            EcheanceListAPI.as_view()(request)
+
+    @override_settings(
+        DJANGO_PAIE={"MODE": "SIMPLE", "MODE_PAR_ENTREPRISE": True}
+    )
+    def test_api_refuse_utilisateur_sans_entreprise(self):
+        from ..api.views import EcheanceListAPI
+        request = self._api_request("GET", "/api/echeances/")
+        with self.assertRaises(PermissionDenied):
+            EcheanceListAPI.as_view()(request)
 
 
 class StatistiquesPaieServiceTest(TestCase):

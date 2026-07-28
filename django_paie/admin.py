@@ -9,6 +9,8 @@ from .models import (
     LigneBulletin,
     CotisationBulletin,
     ValidationPaie,
+    VariablePaieMensuelle,
+    ReglePaie,
 )
 
 
@@ -86,3 +88,19 @@ class RubriquePaieAdmin(admin.ModelAdmin):
     list_filter = ("type_rubrique", "actif", "imposable", "cotisable")
     search_fields = ("code", "libelle")
     list_editable = ("actif", "ordre")
+
+
+@admin.register(VariablePaieMensuelle)
+class VariablePaieMensuelleAdmin(admin.ModelAdmin):
+    list_display = ("employe_object_id", "mois", "annee", "entreprise_id", "updated_at")
+    list_filter = ("annee", "mois", "entreprise_id")
+    search_fields = ("employe_object_id",)
+
+
+@admin.register(ReglePaie)
+class ReglePaieAdmin(admin.ModelAdmin):
+    list_display = (
+        "organisme", "pays", "version", "date_debut", "date_fin",
+        "entreprise_id", "actif",
+    )
+    list_filter = ("organisme", "pays", "actif", "entreprise_id")

@@ -3,10 +3,12 @@ from decimal import Decimal
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from ..complet import MoteurPaie
+from ..complet.modeles import RubriquePaie as RubriqueMoteur
+from ..complet.regles import ReglesCNSS, ReglesAMO, ReglesITS
 from ..complet.integration import RHConnectorDjango
 from ..complet.services import CotisationService
 from ..conf import paie_settings
-from ..models import EcheanceSalariale, PeriodePaie, RubriquePaie
+from ..models import EcheanceSalariale, PeriodePaie, RubriquePaie, ReglePaie
 from ..models.bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, ValidationPaie
 from ..utils import extraire_mois_annee
 
@@ -15,9 +17,33 @@ class ModeCompletService:
     def __init__(self, entreprise_id=""):
         self.entreprise_id = entreprise_id
 
+    def _verifier_mode(self):
+        if paie_settings.get_mode(self.entreprise_id) != "COMPLET":
+            raise ValueError("Le mode COMPLET n'est pas activé.")
+
     def calculer_bulletin(self, employe, periode, rh_stockage=None):
-        rh = RHConnectorDjango(stockage_rh=rh_stockage)
-        moteur = MoteurPaie(stockage=None, rh_connector=rh)
+        self._verifier_mode()
+        self._verifier_entreprise_employe(employe)
+        mois, annee = extraire_mois_annee(periode)
+        date_calcul = date(annee, mois, 1)
+        rh = RHConnectorDjango(
+            stockage_rh=rh_stockage, entreprise_id=self.entreprise_id
+        )
+        moteur = MoteurPaie(
+            stockage=None,
+            rh_connector=rh,
+            regles=self._charger_regles(date_calcul),
+            rubriques=[
+                RubriqueMoteur(
+                    code=r.code,
+                    libelle=r.libelle,
+                    type=r.type_rubrique,
+                    imposable=r.imposable,
+                    cotisable=r.cotisable,
+                )
+                for r in RubriquePaie.objects.filter(actif=True)
+            ],
+        )
         bulletin = moteur.calculer_bulletin(
             employe_id=str(employe.pk),
             periode=periode,
@@ -26,11 +52,54 @@ class ModeCompletService:
         echeance = self._sauvegarder_bulletin(employe, periode, bulletin, bulletin_dataclass_originel=bulletin)
         return bulletin, echeance
 
+    def _verifier_entreprise_employe(self, employe):
+        if not paie_settings.MODE_PAR_ENTREPRISE:
+            return
+        champ = paie_settings.EMPLOYE_ENTREPRISE_FIELD
+        valeur = getattr(employe, champ, None)
+        if valeur is None or str(valeur) != str(self.entreprise_id):
+            raise ValueError("Employé introuvable ou rattaché à une autre entreprise.")
+
+    def _charger_regles(self, date_calcul):
+        resultat = {}
+        for organisme in ("CNSS", "AMO", "ITS"):
+            regle = ReglePaie.pour_date(
+                organisme, date_calcul, entreprise_id=self.entreprise_id
+            )
+            if not regle:
+                continue
+            if organisme == "CNSS":
+                resultat[organisme] = ReglesCNSS(
+                    regle.taux_salarial, regle.taux_patronal, regle.plafond
+                )
+            elif organisme == "AMO":
+                resultat[organisme] = ReglesAMO(
+                    regle.taux_salarial, regle.taux_patronal, regle.plafond
+                )
+            else:
+                resultat[organisme] = ReglesITS(regle.parametres)
+        return resultat
+
     @transaction.atomic
     def _sauvegarder_bulletin(self, employe, periode, bulletin_dataclass, bulletin_dataclass_originel=None):
         mois, annee = extraire_mois_annee(periode)
         periode_obj = PeriodePaie.from_libelle(periode, entreprise_id=self.entreprise_id)
+        if periode_obj.est_cloturee:
+            raise ValueError(f"La période {periode} est clôturée.")
         ct = ContentType.objects.get_for_model(employe)
+        existant = BulletinPaie.objects.filter(
+            echeance__employe_content_type=ct,
+            echeance__employe_object_id=str(employe.pk),
+            echeance__mois=mois,
+            echeance__annee=annee,
+            echeance__entreprise_id=self.entreprise_id,
+        ).first()
+        if existant and (
+            existant.est_verrouille or existant.statut in ("VALIDE", "CLOTURE")
+        ):
+            raise ValueError(
+                "Un bulletin validé ou clôturé ne peut pas être recalculé."
+            )
 
         montant_brut = int(bulletin_dataclass.total_gains())
         montant_net = int(bulletin_dataclass.net_a_payer())
@@ -93,7 +162,10 @@ class ModeCompletService:
         return echeance
 
     def _creer_cotisations_bulletin(self, bulletin_model, bulletin_dataclass, salaire_brut):
-        cotisation_service = CotisationService()
+        cotisation_service = CotisationService(
+            date_calcul=bulletin_model.echeance.date_debut,
+            entreprise_id=self.entreprise_id,
+        )
         codes_cotisations = {
             "CNSS": cotisation_service.cnss,
             "AMO": cotisation_service.amo,
@@ -110,8 +182,16 @@ class ModeCompletService:
                 },
             )
 
-            salariale = regle.calculer_cotisation_salariale(salaire_brut)
-            patronale = regle.calculer_cotisation_patronale(salaire_brut)
+            ligne_moteur = next(
+                (
+                    ligne for ligne in bulletin_dataclass.lignes
+                    if ligne.rubrique_code == code
+                ),
+                None,
+            )
+            assiette = ligne_moteur.base if ligne_moteur else salaire_brut
+            salariale = regle.calculer_cotisation_salariale(assiette)
+            patronale = regle.calculer_cotisation_patronale(assiette)
 
             CotisationBulletin.objects.create(
                 bulletin=bulletin_model,

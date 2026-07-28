@@ -3,6 +3,8 @@ from .periode import PeriodePaie
 from .parametre import ParametrePaie
 from .rubrique import RubriquePaie
 from .bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, ValidationPaie
+from .variable import VariablePaieMensuelle
+from .regle import ReglePaie
 
 __all__ = [
     "EcheanceSalariale",
@@ -14,4 +16,6 @@ __all__ = [
     "LigneBulletin",
     "CotisationBulletin",
     "ValidationPaie",
+    "VariablePaieMensuelle",
+    "ReglePaie",
 ]
