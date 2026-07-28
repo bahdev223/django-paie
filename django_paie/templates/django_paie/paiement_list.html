@@ -1,0 +1,45 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>Paiements salariaux</h1>
+
+<table style="width:100%;border-collapse:collapse;">
+  <thead>
+    <tr style="background:#f5f5f5;">
+      <th style="padding:8px;text-align:left;">Employé</th>
+      <th style="padding:8px;text-align:left;">Période</th>
+      <th style="padding:8px;text-align:right;">Montant</th>
+      <th style="padding:8px;text-align:left;">Date</th>
+      <th style="padding:8px;text-align:left;">Type</th>
+      <th style="padding:8px;text-align:left;">Statut</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in paiements %}
+    <tr style="border-bottom:1px solid #e0e0e0;">
+      <td style="padding:8px;">{{ p.echeance.employe_object_id }}</td>
+      <td style="padding:8px;">{{ p.echeance.periode }}</td>
+      <td style="padding:8px;text-align:right;">{{ p.montant }} F CFA</td>
+      <td style="padding:8px;">{{ p.date_paiement|date:"d/m/Y" }}</td>
+      <td style="padding:8px;">{{ p.get_type_paiement_display }}</td>
+      <td style="padding:8px;">{{ p.get_statut_display }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="6" style="padding:8px;">Aucun paiement.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if page_obj.has_other_pages %}
+<div style="margin-top:1rem;">
+  {% if page_obj.has_previous %}
+    <a href="?page={{ page_obj.previous_page_number }}">Précédent</a>
+  {% endif %}
+  <span>Page {{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}
+    <a href="?page={{ page_obj.next_page_number }}">Suivant</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

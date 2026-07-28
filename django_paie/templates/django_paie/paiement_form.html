@@ -1,0 +1,14 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>Nouveau paiement</h1>
+
+<form method="post" style="max-width:600px;">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit" style="padding:8px 16px;background:#1976d2;color:white;border:none;border-radius:4px;cursor:pointer;">
+    Enregistrer
+  </button>
+</form>
+{% endblock %}

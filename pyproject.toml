@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "django-paie"
-version = "1.0.0"
+version = "0.1.0"
 description = "Application de paie modulaire pour Django - Mode SIMPLE (PME) et mode COMPLET (grandes entreprises)"
 readme = "README.md"
 license = {text = "MIT"}

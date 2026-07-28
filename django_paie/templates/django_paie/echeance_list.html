@@ -1,0 +1,58 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>Échéances salariales</h1>
+
+<form method="get" style="margin:1rem 0;">
+  <select name="statut">
+    <option value="">Tous les statuts</option>
+    {% for key, label in statut_choices %}
+    <option value="{{ key }}" {% if request.GET.statut == key %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="periode" placeholder="MM/AAAA" value="{{ request.GET.periode }}">
+  <button type="submit">Filtrer</button>
+</form>
+
+<table style="width:100%;border-collapse:collapse;">
+  <thead>
+    <tr style="background:#f5f5f5;">
+      <th style="padding:8px;text-align:left;">Employé</th>
+      <th style="padding:8px;text-align:left;">Période</th>
+      <th style="padding:8px;text-align:right;">Brut</th>
+      <th style="padding:8px;text-align:right;">Net</th>
+      <th style="padding:8px;text-align:right;">Payé</th>
+      <th style="padding:8px;text-align:right;">Reste</th>
+      <th style="padding:8px;text-align:left;">Statut</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in echeances %}
+    <tr style="border-bottom:1px solid #e0e0e0;">
+      <td style="padding:8px;"><a href="{% url 'django_paie:echeance-detail' e.pk %}">{{ e.employe_object_id }}</a></td>
+      <td style="padding:8px;">{{ e.periode }}</td>
+      <td style="padding:8px;text-align:right;">{{ e.montant_brut }}</td>
+      <td style="padding:8px;text-align:right;">{{ e.montant_net }}</td>
+      <td style="padding:8px;text-align:right;">{{ e.montant_paye }}</td>
+      <td style="padding:8px;text-align:right;">{{ e.reste_a_payer }}</td>
+      <td style="padding:8px;">{{ e.get_statut_display }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7" style="padding:8px;">Aucune échéance.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if page_obj.has_other_pages %}
+<div style="margin-top:1rem;">
+  {% if page_obj.has_previous %}
+    <a href="?page={{ page_obj.previous_page_number }}">Précédent</a>
+  {% endif %}
+  <span>Page {{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+  {% if page_obj.has_next %}
+    <a href="?page={{ page_obj.next_page_number }}">Suivant</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

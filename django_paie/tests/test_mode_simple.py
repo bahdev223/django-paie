@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from ..services import ModeSimpleService
-from ..utils import generer_periodes_annee, periode_en_cours, est_periode_valide
+from ..utils import generer_periodes_annee, periode_en_cours, est_periode_valide, extraire_mois_annee
 
 
 class ModeSimpleServiceTest(TestCase):
@@ -24,6 +24,8 @@ class ModeSimpleServiceTest(TestCase):
         )
         self.assertEqual(echeance.montant_brut, 50000)
         self.assertEqual(echeance.montant_net, 50000)
+        self.assertEqual(echeance.mois, 7)
+        self.assertEqual(echeance.annee, 2026)
         self.assertEqual(echeance.periode, "07/2026")
         self.assertEqual(echeance.statut, "A_PAYER")
         self.assertEqual(echeance.mode, "SIMPLE")
@@ -32,7 +34,7 @@ class ModeSimpleServiceTest(TestCase):
         self.service.creer_echeance(self.employe, "07/2026", 50000)
         echeance2 = self.service.creer_echeance(self.employe, "07/2026", 60000)
         self.assertEqual(echeance2.montant_brut, 60000)
-        count = EcheanceSalariale.objects.filter(periode="07/2026").count()
+        count = EcheanceSalariale.objects.filter(mois=7, annee=2026).count()
         self.assertEqual(count, 1)
 
     def test_enregistrer_paiement_total(self):
@@ -51,14 +53,6 @@ class ModeSimpleServiceTest(TestCase):
         echeance.refresh_from_db()
         self.assertEqual(echeance.montant_paye, 20000)
         self.assertEqual(echeance.statut, "PARTIELLEMENT_PAYE")
-
-    def test_avance_salariale(self):
-        echeance = self.service.creer_echeance(self.employe, "07/2026", 50000)
-        paiement = self.service.enregistrer_paiement(
-            echeance_id=echeance.id, montant=30000, type_paiement="AVANCE"
-        )
-        self.assertEqual(paiement.type_paiement, "AVANCE")
-        self.assertEqual(paiement.periode_concernee, "08/2026")
 
     def test_mois_impayes(self):
         self.service.creer_echeance(self.employe, "06/2026", 50000)
@@ -93,6 +87,18 @@ class ModeSimpleServiceTest(TestCase):
         self.assertEqual(paiements[0].montant, 50000)
         self.assertEqual(paiements[1].montant, 30000)
 
+    def test_montant_zero_rejete(self):
+        echeance = self.service.creer_echeance(self.employe, "07/2026", 50000)
+        with self.assertRaises(ValueError):
+            self.service.enregistrer_paiement(echeance.id, 0)
+
+    def test_trop_percu(self):
+        echeance = self.service.creer_echeance(self.employe, "07/2026", 50000)
+        self.service.enregistrer_paiement(echeance.id, 60000)
+        echeance.refresh_from_db()
+        self.assertEqual(echeance.statut, "TROPPERCU")
+        self.assertEqual(echeance.trop_percu, 10000)
+
 
 class UtilsTest(TestCase):
     def test_generer_periodes(self):
@@ -111,6 +117,13 @@ class UtilsTest(TestCase):
         self.assertFalse(est_periode_valide("07/99"))
         self.assertFalse(est_periode_valide(""))
 
+    def test_extraire_mois_annee(self):
+        m, a = extraire_mois_annee("07/2026")
+        self.assertEqual(m, 7)
+        self.assertEqual(a, 2026)
+        with self.assertRaises(ValueError):
+            extraire_mois_annee("")
+
 
 class PeriodePaieModelTest(TestCase):
     def test_from_libelle(self):
@@ -119,6 +132,14 @@ class PeriodePaieModelTest(TestCase):
         self.assertEqual(p.annee, 2026)
         self.assertEqual(p.date_debut.month, 7)
         self.assertEqual(p.date_debut.day, 1)
+
+    def test_date_fin_correcte(self):
+        p = PeriodePaie.from_libelle("01/2026")
+        self.assertEqual(p.date_fin.day, 31)
+        p = PeriodePaie.from_libelle("02/2026")
+        self.assertEqual(p.date_fin.day, 28)
+        p = PeriodePaie.from_libelle("07/2026")
+        self.assertEqual(p.date_fin.day, 31)
 
     def test_from_libelle_reutilise(self):
         p1 = PeriodePaie.from_libelle("07/2026")

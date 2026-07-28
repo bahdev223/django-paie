@@ -1,9 +1,8 @@
+from datetime import date
 from decimal import Decimal
-from django.db import models
+from django.db import models, transaction
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.utils import timezone
-from ..conf import paie_settings
 
 
 class EcheanceSalariale(models.Model):
@@ -13,6 +12,7 @@ class EcheanceSalariale(models.Model):
         ("PAYE", "Payé"),
         ("EN_RETARD", "En retard"),
         ("PAYE_EN_AVANCE", "Payé en avance"),
+        ("TROPPERCU", "Trop-perçu"),
         ("ANNULE", "Annulé"),
     ]
 
@@ -25,7 +25,8 @@ class EcheanceSalariale(models.Model):
     employe_object_id = models.CharField(max_length=255)
     employe = GenericForeignKey("employe_content_type", "employe_object_id")
 
-    periode = models.CharField(max_length=7, db_index=True)
+    mois = models.PositiveSmallIntegerField()
+    annee = models.PositiveSmallIntegerField()
     date_debut = models.DateField()
     date_fin = models.DateField()
     date_echeance = models.DateField()
@@ -50,16 +51,24 @@ class EcheanceSalariale(models.Model):
         indexes = [
             models.Index(fields=["employe_content_type", "employe_object_id"]),
             models.Index(fields=["entreprise_id", "statut"]),
-            models.Index(fields=["periode", "entreprise_id"]),
+            models.Index(fields=["annee", "mois", "entreprise_id"]),
         ]
-        unique_together = ["employe_content_type", "employe_object_id", "periode", "entreprise_id"]
+        unique_together = ["employe_content_type", "employe_object_id", "mois", "annee", "entreprise_id"]
 
     def __str__(self):
         return f"{self.employe_object_id} - {self.periode} ({self.get_statut_display()})"
 
     @property
+    def periode(self):
+        return f"{self.mois:02d}/{self.annee}"
+
+    @property
     def reste_a_payer(self):
-        return self.montant_net - self.montant_paye
+        return max(self.montant_net - self.montant_paye, Decimal("0"))
+
+    @property
+    def trop_percu(self):
+        return max(self.montant_paye - self.montant_net, Decimal("0"))
 
     @property
     def est_paye(self):
@@ -72,13 +81,40 @@ class EcheanceSalariale(models.Model):
     def mettre_a_jour_statut(self):
         if self.statut == "ANNULE":
             return
-        if self.montant_paye <= 0:
-            self.statut = "A_PAYER"
+
+        today = date.today()
+
+        if self.montant_paye > self.montant_net:
+            self.statut = "TROPPERCU"
+        elif self.montant_paye <= 0:
+            if today > self.date_echeance and not self._a_paiements_futurs():
+                self.statut = "EN_RETARD"
+            else:
+                self.statut = "A_PAYER"
         elif self.montant_paye < self.montant_net:
-            self.statut = "PARTIELLEMENT_PAYE"
+            if self._a_paiements_futurs():
+                self.statut = "PAYE_EN_AVANCE"
+            elif today > self.date_echeance:
+                self.statut = "EN_RETARD"
+            else:
+                self.statut = "PARTIELLEMENT_PAYE"
         else:
-            self.statut = "PAYE"
+            if self._a_paiements_futurs():
+                self.statut = "PAYE_EN_AVANCE"
+            else:
+                self.statut = "PAYE"
+
         self.save(update_fields=["statut"])
+
+    def _a_paiements_futurs(self):
+        return self.paiements.filter(
+            statut="VALIDE",
+            annee_concerne__gt=self.annee,
+        ).exists() or self.paiements.filter(
+            statut="VALIDE",
+            annee_concerne=self.annee,
+            mois_concerne__gt=self.mois,
+        ).exists()
 
 
 class PaiementSalarial(models.Model):
@@ -104,7 +140,8 @@ class PaiementSalarial(models.Model):
     statut = models.CharField(max_length=20, choices=STATUT_CHOICES, default="VALIDE")
 
     date_paiement = models.DateField()
-    periode_concernee = models.CharField(max_length=7, db_index=True)
+    mois_concerne = models.PositiveSmallIntegerField()
+    annee_concerne = models.PositiveSmallIntegerField()
 
     mois_concerne_debut = models.CharField(max_length=7, blank=True, default="")
     mois_concerne_fin = models.CharField(max_length=7, blank=True, default="")
@@ -124,9 +161,9 @@ class PaiementSalarial(models.Model):
         return f"{self.montant} F CFA - {self.echeance} ({self.get_type_paiement_display()})"
 
     def save(self, *args, **kwargs):
-        is_new = self._state.adding
-        super().save(*args, **kwargs)
-        if is_new or self.statut == "VALIDE":
+        with transaction.atomic():
+            echeance = EcheanceSalariale.objects.select_for_update().get(pk=self.echeance_id)
+            super().save(*args, **kwargs)
             self._recalculer_echeance()
 
     def _recalculer_echeance(self):
@@ -139,6 +176,7 @@ class PaiementSalarial(models.Model):
         self.echeance.mettre_a_jour_statut()
 
     def annuler(self):
-        self.statut = "ANNULE"
-        self.save(update_fields=["statut"])
-        self._recalculer_echeance()
+        with transaction.atomic():
+            echeance = EcheanceSalariale.objects.select_for_update().get(pk=self.echeance_id)
+            self.statut = "ANNULE"
+            self.save(update_fields=["statut"])

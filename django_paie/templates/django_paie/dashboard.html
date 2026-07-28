@@ -1,0 +1,53 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>Tableau de bord - Paie</h1>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin:2rem 0;">
+  <div style="padding:1rem;background:#e3f2fd;border-radius:8px;text-align:center;">
+    <h3>{{ dashboard.total_echeances }}</h3>
+    <p>Échéances</p>
+  </div>
+  <div style="padding:1rem;background:#fce4ec;border-radius:8px;text-align:center;">
+    <h3>{{ dashboard.a_payer }}</h3>
+    <p>À payer</p>
+  </div>
+  <div style="padding:1rem;background:#c8e6c9;border-radius:8px;text-align:center;">
+    <h3>{{ dashboard.paye }}</h3>
+    <p>Payés</p>
+  </div>
+  <div style="padding:1rem;background:#fff3e0;border-radius:8px;text-align:center;">
+    <h3>{{ dashboard.en_retard }}</h3>
+    <p>En retard</p>
+  </div>
+  <div style="padding:1rem;background:#e8eaf6;border-radius:8px;text-align:center;">
+    <h3>{{ dashboard.partiel }}</h3>
+    <p>Partiels</p>
+  </div>
+</div>
+
+<h2>Derniers paiements</h2>
+<table style="width:100%;border-collapse:collapse;">
+  <thead>
+    <tr style="background:#f5f5f5;">
+      <th style="padding:8px;text-align:left;">Employé</th>
+      <th style="padding:8px;text-align:left;">Montant</th>
+      <th style="padding:8px;text-align:left;">Date</th>
+      <th style="padding:8px;text-align:left;">Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in derniers_paiements %}
+    <tr style="border-bottom:1px solid #e0e0e0;">
+      <td style="padding:8px;">{{ p.echeance.employe_object_id }}</td>
+      <td style="padding:8px;">{{ p.montant }} F CFA</td>
+      <td style="padding:8px;">{{ p.date_paiement|date:"d/m/Y" }}</td>
+      <td style="padding:8px;">{{ p.get_type_paiement_display }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="4" style="padding:8px;">Aucun paiement récent.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

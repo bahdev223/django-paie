@@ -2,6 +2,14 @@ from datetime import date, datetime, timedelta
 from calendar import monthrange
 
 
+def extraire_mois_annee(periode):
+    try:
+        mois, annee = periode.split("/")
+        return int(mois), int(annee)
+    except (ValueError, AttributeError):
+        raise ValueError(f"Période invalide : {periode}. Format attendu : MM/AAAA")
+
+
 def generer_periodes_annee(annee):
     return [f"{m:02d}/{annee}" for m in range(1, 13)]
 

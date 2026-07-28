@@ -45,8 +45,6 @@ class PeriodePaie(models.Model):
             date_fin = date(annee + 1, 1, 1) - timedelta(days=1)
         else:
             date_fin = date(annee, mois + 1, 1) - timedelta(days=1)
-        if date_fin.day > 28:
-            date_fin = date(annee, mois, 28)
         obj, _ = cls.objects.get_or_create(
             mois=mois, annee=annee, entreprise_id=entreprise_id,
             defaults={"date_debut": date_debut, "date_fin": date_fin},
