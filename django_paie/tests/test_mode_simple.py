@@ -87,12 +87,28 @@ class ModeSimpleServiceTest(TestCase):
     def test_payer_plusieurs_mois(self):
         self.service.creer_echeance(self.employe, "07/2026", 50000)
         self.service.creer_echeance(self.employe, "08/2026", 50000)
-        paiements = self.service.payer_plusieurs_mois(
+        resultat = self.service.payer_plusieurs_mois(
             self.employe, 80000, "07/2026", "08/2026"
         )
+        paiements = resultat["paiements"]
         self.assertEqual(len(paiements), 2)
         self.assertEqual(paiements[0].montant, 50000)
         self.assertEqual(paiements[1].montant, 30000)
+        self.assertEqual(resultat["montant_affecte"], Decimal("80000"))
+        self.assertEqual(resultat["reliquat"], Decimal("0"))
+
+    def test_payer_plusieurs_mois_retourne_reliquat(self):
+        self.service.creer_echeance(self.employe, "07/2026", 50000)
+        self.service.creer_echeance(self.employe, "08/2026", 50000)
+        resultat = self.service.payer_plusieurs_mois(
+            self.employe, 120000, "07/2026", "08/2026"
+        )
+        self.assertEqual(resultat["montant_affecte"], Decimal("100000"))
+        self.assertEqual(resultat["reliquat"], Decimal("20000"))
+
+    def test_creer_echeance_negative_refusee(self):
+        with self.assertRaises(ValueError):
+            self.service.creer_echeance(self.employe, "07/2026", -50000)
 
     def test_montant_zero_rejete(self):
         echeance = self.service.creer_echeance(self.employe, "07/2026", 50000)
@@ -130,6 +146,14 @@ class ModeSimpleServiceTest(TestCase):
         echeance.refresh_from_db()
         self.assertEqual(echeance.montant_paye, 0)
         self.assertIn(echeance.statut, ["A_PAYER", "EN_RETARD"])
+
+    def test_paiement_valide_ne_peut_pas_etre_deplace(self):
+        echeance_1 = self.service.creer_echeance(self.employe, "07/2026", 50000)
+        echeance_2 = self.service.creer_echeance(self.employe, "08/2026", 50000)
+        paiement = self.service.enregistrer_paiement(echeance_1.id, 50000)
+        paiement.echeance = echeance_2
+        with self.assertRaises(ValueError):
+            paiement.save()
 
     def test_arriere_detecte_automatiquement(self):
         echeance = self.service.creer_echeance(self.employe, "06/2026", 50000)
@@ -278,6 +302,19 @@ class APITest(TestCase):
         self.assertEqual(response.status_code, 201)
         data = json.loads(response.content)
         self.assertEqual(data["data"]["montant"], 50000)
+
+    def test_api_cloture_refuse_si_autre_echeance_impayee(self):
+        from ..api.views import EcheanceDetailAPI
+        service = ModeSimpleService()
+        autre = User.objects.create_user(username="autre")
+        echeance_payee = service.creer_echeance(self.employe, "07/2026", 50000)
+        service.creer_echeance(autre, "07/2026", 50000)
+        service.enregistrer_paiement(echeance_payee.id, 50000)
+        request = self._api_request(
+            "POST", f"/api/echeances/{echeance_payee.id}/", {"action": "cloturer"}
+        )
+        response = EcheanceDetailAPI.as_view()(request, pk=echeance_payee.id)
+        self.assertEqual(response.status_code, 400)
 
     def test_api_refuse_utilisateur_sans_permission(self):
         from ..api.views import EcheanceListAPI

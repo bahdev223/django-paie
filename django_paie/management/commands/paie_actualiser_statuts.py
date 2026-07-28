@@ -11,21 +11,15 @@ class Command(BaseCommand):
         total = 0
         modifies = 0
 
-        echeances = EcheanceSalariale.objects.exclude(statut__in=["PAYE", "ANNULE", "TROPPERCU"])
+        echeances = EcheanceSalariale.objects.exclude(statut__in=["ANNULE", "TROPPERCU"])
 
         for e in echeances:
             total += 1
             ancien_statut = e.statut
 
-            if today > e.date_echeance and e.statut == "A_PAYER":
-                e.statut = "EN_RETARD"
-            elif today > e.date_echeance and e.statut == "PARTIELLEMENT_PAYE":
-                e.statut = "EN_RETARD"
-            elif today <= e.date_echeance and e.statut == "EN_RETARD":
-                e.statut = "A_PAYER"
-
+            e.mettre_a_jour_statut()
+            e.refresh_from_db(fields=["statut"])
             if e.statut != ancien_statut:
-                e.save(update_fields=["statut"])
                 modifies += 1
                 self.stdout.write(
                     f"  {e.employe_object_id} - {e.periode}: {ancien_statut} → {e.statut}"

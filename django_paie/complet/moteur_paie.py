@@ -9,6 +9,7 @@ from .exceptions import (
     ErreurContratInvalide,
     ErreurBulletinVerrouille,
     ErreurPeriodeInvalide,
+    ConfigurationPaieInvalide,
 )
 from .regles import ReglesCNSS, ReglesAMO, ReglesITS
 
@@ -140,20 +141,26 @@ class MoteurPaie:
 
         salaire_brut = sum(
             ligne.montant for ligne in bulletin.lignes
-            if ligne.montant > 0
-            and self.rubriques.get(ligne.rubrique_code)
+            if self.rubriques.get(ligne.rubrique_code)
             and self.rubriques[ligne.rubrique_code].cotisable
         )
         salaire_imposable_brut = sum(
             ligne.montant for ligne in bulletin.lignes
-            if ligne.montant > 0
-            and self.rubriques.get(ligne.rubrique_code)
+            if self.rubriques.get(ligne.rubrique_code)
             and self.rubriques[ligne.rubrique_code].imposable
         )
+        salaire_brut = max(salaire_brut, Decimal("0"))
+        salaire_imposable_brut = max(salaire_imposable_brut, Decimal("0"))
 
-        regles_cnss = self.regles.get("CNSS") or ReglesCNSS()
-        regles_amo = self.regles.get("AMO") or ReglesAMO()
-        regles_its = self.regles.get("ITS") or ReglesITS()
+        manquantes = [code for code in ("CNSS", "AMO", "ITS") if code not in self.regles]
+        if manquantes:
+            raise ConfigurationPaieInvalide(
+                f"Règles manquantes : {', '.join(manquantes)}"
+            )
+
+        regles_cnss = self.regles["CNSS"]
+        regles_amo = self.regles["AMO"]
+        regles_its = self.regles["ITS"]
 
         cnss = regles_cnss.calculer_cotisation_salariale(salaire_brut)
         bulletin.lignes.append(

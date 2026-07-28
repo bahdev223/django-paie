@@ -54,6 +54,32 @@ class EcheanceSalariale(models.Model):
             models.Index(fields=["annee", "mois", "entreprise_id"]),
         ]
         unique_together = ["employe_content_type", "employe_object_id", "mois", "annee", "entreprise_id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(mois__gte=1, mois__lte=12),
+                name="paie_echeance_mois_valide",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(annee__gte=2000, annee__lte=2100),
+                name="paie_echeance_annee_valide",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(date_debut__lte=models.F("date_fin")),
+                name="paie_echeance_dates_valides",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(montant_brut__gte=0),
+                name="paie_echeance_brut_non_negatif",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(montant_net__gte=0),
+                name="paie_echeance_net_non_negatif",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(montant_paye__gte=0),
+                name="paie_echeance_paye_non_negatif",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.employe_object_id} - {self.periode} ({self.get_statut_display()})"
@@ -108,9 +134,13 @@ class EcheanceSalariale(models.Model):
         self.save(update_fields=["statut", "montant_paye"])
 
     def _a_paiements_futurs(self):
+        today = date.today()
+        if (self.annee, self.mois) > (today.year, today.month):
+            return self.paiements.filter(statut="VALIDE", type_paiement="AVANCE").exists()
         return self.paiements.filter(
             statut="VALIDE",
             type_paiement="AVANCE",
+            date_paiement__gt=today,
         ).exists() or self.paiements.filter(
             statut="VALIDE",
             annee_concerne__gt=self.annee,
@@ -136,7 +166,7 @@ class PaiementSalarial(models.Model):
     ]
 
     echeance = models.ForeignKey(
-        EcheanceSalariale, on_delete=models.CASCADE, related_name="paiements"
+        EcheanceSalariale, on_delete=models.PROTECT, related_name="paiements"
     )
     montant = models.DecimalField(max_digits=14, decimal_places=0)
     type_paiement = models.CharField(max_length=20, choices=TYPE_CHOICES, default="PAIEMENT")
@@ -159,12 +189,43 @@ class PaiementSalarial(models.Model):
         verbose_name = "Paiement salarial"
         verbose_name_plural = "Paiements salariaux"
         ordering = ["-date_paiement"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(montant__gt=0),
+                name="paie_paiement_montant_positif",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(mois_concerne__gte=1, mois_concerne__lte=12),
+                name="paie_paiement_mois_valide",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(annee_concerne__gte=2000, annee_concerne__lte=2100),
+                name="paie_paiement_annee_valide",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.montant} F CFA - {self.echeance} ({self.get_type_paiement_display()})"
 
     def save(self, *args, **kwargs):
         with transaction.atomic():
+            ancien_echeance_id = None
+            ancien_statut = None
+            if self.pk:
+                ancien = PaiementSalarial.objects.select_for_update().get(pk=self.pk)
+                ancien_echeance_id = ancien.echeance_id
+                ancien_statut = ancien.statut
+                if ancien_statut == "VALIDE" and ancien_echeance_id != self.echeance_id:
+                    raise ValueError(
+                        "Un paiement validé ne peut pas être déplacé. Annulez-le puis créez un nouveau paiement."
+                    )
+                update_fields = kwargs.get("update_fields")
+                if update_fields is not None:
+                    update_fields = set(update_fields)
+                if ancien_statut == "VALIDE" and update_fields != {"statut"}:
+                    raise ValueError(
+                        "Un paiement validé ne peut pas être modifié. Annulez-le puis créez un nouveau paiement."
+                    )
             echeance = EcheanceSalariale.objects.select_for_update().get(pk=self.echeance_id)
             from .periode import PeriodePaie
             if echeance.date_cloture or PeriodePaie.objects.filter(
@@ -178,15 +239,19 @@ class PaiementSalarial(models.Model):
                 )
             super().save(*args, **kwargs)
             self._recalculer_echeance()
+            if ancien_echeance_id and ancien_echeance_id != self.echeance_id:
+                ancienne = EcheanceSalariale.objects.select_for_update().get(pk=ancien_echeance_id)
+                self._recalculer_echeance(ancienne)
 
-    def _recalculer_echeance(self):
+    def _recalculer_echeance(self, echeance=None):
+        echeance = echeance or self.echeance
         total = (
             PaiementSalarial.objects.filter(
-                echeance=self.echeance, statut="VALIDE"
+                echeance=echeance, statut="VALIDE"
             ).aggregate(total=models.Sum("montant"))["total"] or Decimal("0")
         )
-        self.echeance.montant_paye = total
-        self.echeance.mettre_a_jour_statut()
+        echeance.montant_paye = total
+        echeance.mettre_a_jour_statut()
 
     def annuler(self):
         with transaction.atomic():
@@ -203,3 +268,10 @@ class PaiementSalarial(models.Model):
                 )
             self.statut = "ANNULE"
             self.save(update_fields=["statut"])
+
+    def delete(self, *args, **kwargs):
+        if self.statut == "VALIDE":
+            raise ValueError(
+                "Un paiement validé ne peut pas être supprimé. Utilisez l'annulation."
+            )
+        return super().delete(*args, **kwargs)

@@ -42,6 +42,10 @@ class ModeSimpleService:
         self._verifier_entreprise_employe(employe)
         if montant_net is None:
             montant_net = montant_brut
+        montant_brut = Decimal(str(montant_brut))
+        montant_net = Decimal(str(montant_net))
+        if montant_brut < 0 or montant_net < 0:
+            raise ValueError("Les montants d'une échéance doivent être positifs ou nuls.")
 
         mois, annee = extraire_mois_annee(periode)
         if date_echeance is None:
@@ -93,8 +97,11 @@ class ModeSimpleService:
                              notes="", employe=None, periode=None, periode_cible=None,
                              montant_mensuel=None):
         self._verifier_mode()
+        self._verifier_entreprise_employe(employe)
         if date_paiement is None:
             date_paiement = date.today()
+        if Decimal(str(montant)) <= 0:
+            raise ValueError("Le montant du paiement doit être positif.")
 
         with transaction.atomic():
             if echeance_id:
@@ -258,7 +265,11 @@ class ModeSimpleService:
                 paiements.append(paiement)
                 montant_restant -= a_payer
 
-        return paiements
+        return {
+            "paiements": paiements,
+            "montant_affecte": Decimal(str(montant)) - montant_restant,
+            "reliquat": montant_restant,
+        }
 
     def mois_impayes(self, employe, annee=None):
         if annee is None:

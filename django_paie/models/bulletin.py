@@ -12,7 +12,7 @@ class BulletinPaie(models.Model):
     ]
 
     echeance = models.OneToOneField(
-        "EcheanceSalariale", on_delete=models.CASCADE, related_name="bulletin_detail"
+        "EcheanceSalariale", on_delete=models.PROTECT, related_name="bulletin_detail"
     )
     total_gains = models.DecimalField(max_digits=14, decimal_places=0, default=0)
     total_retenues = models.DecimalField(max_digits=14, decimal_places=0, default=0)
@@ -32,6 +32,11 @@ class BulletinPaie(models.Model):
 
     def __str__(self):
         return f"Bulletin {self.echeance.periode} - {self.echeance.employe_object_id}"
+
+    def delete(self, *args, **kwargs):
+        if self.est_verrouille or self.statut in ("VALIDE", "CLOTURE"):
+            raise ValueError("Un bulletin validé ou clôturé ne peut pas être supprimé.")
+        return super().delete(*args, **kwargs)
 
 
 class LigneBulletin(models.Model):

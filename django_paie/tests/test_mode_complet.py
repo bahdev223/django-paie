@@ -9,7 +9,7 @@ from django.test import Client, TestCase, override_settings
 
 from ..complet.export import ExportExcel, ExportPDF
 from ..complet.modeles import BulletinPaie, LignePaie
-from ..models import ReglePaie, VariablePaieMensuelle
+from ..models import EcheanceSalariale, PaiementSalarial, ReglePaie, VariablePaieMensuelle
 from ..services import ModeCompletService
 
 
@@ -47,6 +47,27 @@ class FauxRH:
         }
 
 
+class PetitContrat:
+    salaire_base = Decimal("100000")
+
+
+class FauxRHSansVariables:
+    def get_employe(self, matricule):
+        return matricule
+
+    def get_contrat_actif(self, matricule):
+        return PetitContrat()
+
+    def get_absences_mois(self, matricule, annee, mois):
+        return 0
+
+    def get_heures_mois(self, matricule, annee, mois):
+        return Decimal("151.67")
+
+    def get_variables_mois(self, matricule, annee, mois):
+        return {}
+
+
 @override_settings(DJANGO_PAIE={"MODE": "COMPLET"})
 class ModeCompletTest(TestCase):
     def setUp(self):
@@ -66,6 +87,39 @@ class ModeCompletTest(TestCase):
         )
         self.assertGreater(bulletin.total_gains(), Decimal("450000"))
         self.assertEqual(echeance.mode, "COMPLET")
+
+    def test_base_cnss_amo_inclut_salaire_base(self):
+        bulletin, _ = ModeCompletService().calculer_bulletin(
+            self.employe, "07/2026", rh_stockage=FauxRHSansVariables()
+        )
+        lignes = {ligne.rubrique_code: ligne for ligne in bulletin.lignes}
+        self.assertEqual(lignes["CNSS"].base, Decimal("100000"))
+        self.assertEqual(lignes["CNSS"].montant, Decimal("-3600"))
+        self.assertEqual(lignes["AMO"].base, Decimal("100000"))
+        self.assertEqual(lignes["AMO"].montant, Decimal("-5000"))
+
+    def test_regles_obligatoires_manquantes_refusent_calcul(self):
+        ReglePaie.objects.filter(organisme="ITS").delete()
+        with self.assertRaisesRegex(Exception, "Règles manquantes"):
+            ModeCompletService().calculer_bulletin(
+                self.employe, "07/2026", rh_stockage=FauxRHSansVariables()
+            )
+
+    def test_bulletin_paye_ne_peut_pas_etre_recalcule(self):
+        _, echeance = ModeCompletService().calculer_bulletin(
+            self.employe, "07/2026", rh_stockage=FauxRHSansVariables()
+        )
+        PaiementSalarial.objects.create(
+            echeance=echeance,
+            montant=echeance.montant_net,
+            date_paiement=date(2026, 7, 31),
+            mois_concerne=7,
+            annee_concerne=2026,
+        )
+        with self.assertRaisesRegex(ValueError, "paiement"):
+            ModeCompletService().calculer_bulletin(
+                self.employe, "07/2026", rh_stockage=FauxRHSansVariables()
+            )
 
     def test_variable_django_est_lue_par_adaptateur_defaut(self):
         ct = ContentType.objects.get_for_model(self.employe)

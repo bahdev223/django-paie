@@ -20,3 +20,7 @@ class ErreurContratInvalide(ErreurPaie):
 
 class ErreurBulletinVerrouille(ErreurPaie):
     pass
+
+
+class ConfigurationPaieInvalide(ErreurPaie):
+    pass

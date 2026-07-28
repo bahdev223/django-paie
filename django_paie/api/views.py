@@ -5,6 +5,7 @@ from django.http import JsonResponse
 from django.views import View
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie, RubriquePaie
 from ..models.bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, ValidationPaie
 from ..services import ModeSimpleService, ModeCompletService, StatistiquesPaieService
@@ -243,22 +244,29 @@ class EcheanceDetailAPI(APIView):
         if action == "cloturer":
             if not request.user.has_perm("django_paie.cloturer_periode"):
                 return _json_error("Permission refusée.", 403)
-            if e.reste_a_payer > 0:
-                return _json_error(
-                    f"Impossible de clôturer : reste {e.reste_a_payer} F CFA à payer.", 400
+            with transaction.atomic():
+                e = EcheanceSalariale.objects.select_for_update().get(pk=e.pk)
+                periode_qs = EcheanceSalariale.objects.select_for_update().filter(
+                    mois=e.mois, annee=e.annee, entreprise_id=e.entreprise_id
                 )
-            periode = PeriodePaie.from_libelle(e.periode, entreprise_id=e.entreprise_id)
-            periode.est_cloturee = True
-            periode.save(update_fields=["est_cloturee"])
-            EcheanceSalariale.objects.filter(
-                mois=e.mois, annee=e.annee, entreprise_id=e.entreprise_id
-            ).update(date_cloture=date.today())
-            BulletinPaie.objects.filter(
-                echeance__mois=e.mois,
-                echeance__annee=e.annee,
-                echeance__entreprise_id=e.entreprise_id,
-            ).update(est_verrouille=True, statut="CLOTURE")
-            e.refresh_from_db()
+                non_reglees = periode_qs.exclude(
+                    statut__in=["PAYE", "PAYE_EN_AVANCE", "ANNULE"]
+                )
+                if non_reglees.exists():
+                    return _json_error(
+                        "Impossible de clôturer : toutes les échéances de la période doivent être réglées.",
+                        400,
+                    )
+                periode = PeriodePaie.from_libelle(e.periode, entreprise_id=e.entreprise_id)
+                periode.est_cloturee = True
+                periode.save(update_fields=["est_cloturee"])
+                periode_qs.update(date_cloture=date.today())
+                BulletinPaie.objects.filter(
+                    echeance__mois=e.mois,
+                    echeance__annee=e.annee,
+                    echeance__entreprise_id=e.entreprise_id,
+                ).update(est_verrouille=True, statut="CLOTURE")
+                e.refresh_from_db()
             return JsonResponse({"data": _serialize_echeance(e)})
         return _json_error("Action non supportée.")
 

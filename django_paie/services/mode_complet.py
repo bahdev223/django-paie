@@ -100,6 +100,10 @@ class ModeCompletService:
             raise ValueError(
                 "Un bulletin validé ou clôturé ne peut pas être recalculé."
             )
+        if existant and existant.echeance.montant_paye > 0:
+            raise ValueError(
+                "Un bulletin ayant reçu un paiement ne peut plus être recalculé."
+            )
 
         montant_brut = int(bulletin_dataclass.total_gains())
         montant_net = int(bulletin_dataclass.net_a_payer())
