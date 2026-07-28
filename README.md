@@ -34,4 +34,3 @@ DJANGO_PAIE = {
 - Bulletins détaillés
 - Cotisations salariales et patronales
 - Exports PDF et Excel
-- Écritures comptables

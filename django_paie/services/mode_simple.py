@@ -63,14 +63,21 @@ class ModeSimpleService:
         return echeance
 
     def enregistrer_paiement(self, echeance_id=None, montant=0, date_paiement=None, type_paiement="PAIEMENT",
-                             notes="", employe=None, periode=None):
+                             notes="", employe=None, periode=None, periode_cible=None):
         if date_paiement is None:
             date_paiement = date.today()
 
         with transaction.atomic():
             if echeance_id:
-                echeance = EcheanceSalariale.objects.select_for_update().get(pk=echeance_id)
+                qs = EcheanceSalariale.objects.select_for_update()
+                if self.entreprise_id:
+                    qs = qs.filter(entreprise_id=self.entreprise_id)
+                try:
+                    echeance = qs.get(pk=echeance_id)
+                except EcheanceSalariale.DoesNotExist:
+                    raise ValueError("Échéance introuvable ou accès refusé.")
                 mois_concerne, annee_concerne = echeance.mois, echeance.annee
+                employe = employe or echeance.employe
             elif employe and periode:
                 mois_concerne, annee_concerne = extraire_mois_annee(periode)
                 ct = ContentType.objects.get_for_model(employe)
@@ -86,8 +93,8 @@ class ModeSimpleService:
                         "date_debut": periode_obj.date_debut,
                         "date_fin": periode_obj.date_fin,
                         "date_echeance": date(annee_concerne, mois_concerne, min(paie_settings.JOUR_PAIEMENT, dernier_jour)),
-                        "montant_brut": montant,
-                        "montant_net": montant,
+                        "montant_brut": 0,
+                        "montant_net": 0,
                         "mode": "SIMPLE",
                     },
                 )
@@ -99,12 +106,17 @@ class ModeSimpleService:
                 raise ValueError("Le montant du paiement doit être positif.")
 
             if type_paiement == "AVANCE":
-                target_mois, target_annee = self._periode_suivante(echeance.mois, echeance.annee)
+                if periode_cible:
+                    target_mois, target_annee = extraire_mois_annee(periode_cible)
+                else:
+                    target_mois, target_annee = self._periode_suivante(echeance.mois, echeance.annee)
                 target_periode = f"{target_mois:02d}/{target_annee}"
                 periode_obj = PeriodePaie.from_libelle(target_periode, entreprise_id=self.entreprise_id)
                 dernier_jour = calendar.monthrange(target_annee, target_mois)[1]
                 ct = ContentType.objects.get_for_model(employe or echeance.employe)
                 emp_id = str(getattr(employe, "pk", echeance.employe_object_id))
+                montant_brut_cible = echeance.montant_brut if echeance.montant_brut > 0 else montant
+                montant_net_cible = echeance.montant_net if echeance.montant_net > 0 else montant
                 target_echeance, _ = EcheanceSalariale.objects.get_or_create(
                     employe_content_type=echeance.employe_content_type,
                     employe_object_id=emp_id,
@@ -115,8 +127,8 @@ class ModeSimpleService:
                         "date_debut": periode_obj.date_debut,
                         "date_fin": periode_obj.date_fin,
                         "date_echeance": date(target_annee, target_mois, min(paie_settings.JOUR_PAIEMENT, dernier_jour)),
-                        "montant_brut": echeance.montant_brut,
-                        "montant_net": echeance.montant_net,
+                        "montant_brut": montant_brut_cible,
+                        "montant_net": montant_net_cible,
                         "mode": "SIMPLE",
                     },
                 )
@@ -220,14 +232,14 @@ class ModeSimpleService:
             annee=annee,
         ).exclude(statut="ANNULE")
 
-        net_values = list(qs.values_list("montant_net", flat=True))
-        paye_values = list(qs.values_list("montant_paye", flat=True))
+        echeances = list(qs)
+        reste_global = sum(int(e.reste_a_payer) for e in echeances)
 
         return {
             "total_echeances": qs.count(),
-            "total_montant_du": sum(net_values),
-            "total_montant_paye": sum(paye_values),
-            "reste_global": sum(n - p for n, p in zip(net_values, paye_values)),
+            "total_montant_du": sum(int(e.montant_net) for e in echeances),
+            "total_montant_paye": sum(int(e.montant_paye) for e in echeances),
+            "reste_global": reste_global,
             "a_payer": qs.filter(statut="A_PAYER").count(),
             "paye": qs.filter(statut="PAYE").count(),
             "partiel": qs.filter(statut="PARTIELLEMENT_PAYE").count(),

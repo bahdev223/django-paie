@@ -213,14 +213,25 @@ class PeriodePaieModelTest(TestCase):
 
 class APITest(TestCase):
     def setUp(self):
-        self.employe = User.objects.create_user(username="api_test", password="test123")
+        self.employe = User.objects.create_user(
+            username="api_test", password="test123", is_staff=True,
+        )
+
+    def _api_request(self, method, path, data=None):
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        if method == "GET":
+            request = factory.get(path)
+        else:
+            request = factory.post(path, json.dumps(data), content_type="application/json")
+        self.employe.is_superuser = True
+        self.employe.save(update_fields=["is_superuser"])
+        request.user = self.employe
+        return request
 
     def test_api_echeance_list(self):
         from ..api.views import EcheanceListAPI
-        from django.test import RequestFactory
-        factory = RequestFactory()
-        request = factory.get("/api/echeances/")
-        request.user = self.employe
+        request = self._api_request("GET", "/api/echeances/")
         response = EcheanceListAPI.as_view()(request)
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
@@ -229,17 +240,10 @@ class APITest(TestCase):
 
     def test_api_paiement_create(self):
         from ..api.views import PaiementListAPI
-        from django.test import RequestFactory
-        import json
         service = ModeSimpleService()
         echeance = service.creer_echeance(self.employe, "07/2026", 50000)
-        factory = RequestFactory()
-        request = factory.post(
-            "/api/paiements/",
-            json.dumps({"echeance_id": echeance.id, "montant": 50000}),
-            content_type="application/json",
-        )
-        request.user = self.employe
+        request = self._api_request("POST", "/api/paiements/",
+                                    {"echeance_id": echeance.id, "montant": 50000})
         response = PaiementListAPI.as_view()(request)
         self.assertEqual(response.status_code, 201)
         data = json.loads(response.content)

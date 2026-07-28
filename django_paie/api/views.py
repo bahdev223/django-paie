@@ -5,19 +5,26 @@ from django.http import JsonResponse
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
+from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie, RubriquePaie
 from ..models.bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, ValidationPaie
 from ..services import ModeSimpleService, ModeCompletService, StatistiquesPaieService
 from ..conf import paie_settings
-from ..utils import extraire_mois_annee
 
 
-def _get_entreprise_id(request):
-    if paie_settings.MODE_PAR_ENTREPRISE:
-        return getattr(request.user, "entreprise_id", "")
-    return ""
+class APIView(LoginRequiredMixin, View):
+    permission_required = "django_paie.view_echeancesalariale"
+
+    def has_permission(self):
+        if not self.request.user.is_authenticated:
+            return False
+        if self.request.user.is_superuser:
+            return True
+        if paie_settings.MODE_PAR_ENTREPRISE:
+            entreprise_id = getattr(self.request.user, "entreprise_id", "")
+            if not entreprise_id:
+                return False
+        return self.request.user.has_perm(self.permission_required)
 
 
 def _json_error(msg, status=400):
@@ -126,9 +133,11 @@ def _serialize_bulletin(b):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class EcheanceListAPI(View):
+class EcheanceListAPI(APIView):
+    permission_required = "django_paie.view_echeancesalariale"
+
     def get(self, request):
-        entreprise_id = _get_entreprise_id(request)
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
         qs = EcheanceSalariale.objects.all()
         if entreprise_id:
             qs = qs.filter(entreprise_id=entreprise_id)
@@ -153,6 +162,8 @@ class EcheanceListAPI(View):
         )
 
     def post(self, request):
+        if not request.user.has_perm("django_paie.add_echeancesalariale"):
+            return _json_error("Permission refusée.", 403)
         data = _parse_json(request)
         if not data:
             return _json_error("Corps JSON requis.")
@@ -169,7 +180,8 @@ class EcheanceListAPI(View):
         except model.DoesNotExist:
             return _json_error(f"Employé {employe_id} introuvable.", 404)
 
-        service = ModeSimpleService(entreprise_id=_get_entreprise_id(request))
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
+        service = ModeSimpleService(entreprise_id=entreprise_id)
         try:
             echeance = service.creer_echeance(
                 employe=employe,
@@ -184,24 +196,40 @@ class EcheanceListAPI(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class EcheanceDetailAPI(View):
+class EcheanceDetailAPI(APIView):
+    permission_required = "django_paie.view_echeancesalariale"
+
+    def _verifier_acces(self, echeance):
+        if not paie_settings.MODE_PAR_ENTREPRISE:
+            return True
+        uid = getattr(self.request.user, "entreprise_id", "")
+        return not uid or echeance.entreprise_id == uid
+
     def get(self, request, pk):
         try:
             e = EcheanceSalariale.objects.prefetch_related("paiements").get(pk=pk)
         except EcheanceSalariale.DoesNotExist:
             return _json_error("Échéance introuvable.", 404)
+        if not self._verifier_acces(e):
+            return _json_error("Accès refusé.", 403)
         return JsonResponse({"data": _serialize_echeance(e, include_paiements=True)})
 
     def post(self, request, pk):
         data = _parse_json(request)
         if not data:
             return _json_error("Corps JSON requis.")
+        try:
+            e = EcheanceSalariale.objects.get(pk=pk)
+        except EcheanceSalariale.DoesNotExist:
+            return _json_error("Échéance introuvable.", 404)
+        if not self._verifier_acces(e):
+            return _json_error("Accès refusé.", 403)
         action = data.get("action")
         if action == "cloturer":
-            try:
-                e = EcheanceSalariale.objects.get(pk=pk)
-            except EcheanceSalariale.DoesNotExist:
-                return _json_error("Échéance introuvable.", 404)
+            if e.reste_a_payer > 0:
+                return _json_error(
+                    f"Impossible de clôturer : reste {e.reste_a_payer} F CFA à payer.", 400
+                )
             e.date_cloture = date.today()
             e.statut = "PAYE"
             e.save(update_fields=["date_cloture", "statut"])
@@ -210,9 +238,11 @@ class EcheanceDetailAPI(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class PaiementListAPI(View):
+class PaiementListAPI(APIView):
+    permission_required = "django_paie.view_paiementsalarial"
+
     def get(self, request):
-        entreprise_id = _get_entreprise_id(request)
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
         qs = PaiementSalarial.objects.select_related("echeance").all()
         if entreprise_id:
             qs = qs.filter(echeance__entreprise_id=entreprise_id)
@@ -225,11 +255,14 @@ class PaiementListAPI(View):
         )
 
     def post(self, request):
+        if not request.user.has_perm("django_paie.add_paiementsalarial"):
+            return _json_error("Permission refusée.", 403)
         data = _parse_json(request)
         if not data:
             return _json_error("Corps JSON requis.")
 
-        service = ModeSimpleService(entreprise_id=_get_entreprise_id(request))
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
+        service = ModeSimpleService(entreprise_id=entreprise_id)
         try:
             paiement = service.enregistrer_paiement(
                 echeance_id=data.get("echeance_id"),
@@ -244,12 +277,18 @@ class PaiementListAPI(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class PaiementAnnulerAPI(View):
+class PaiementAnnulerAPI(APIView):
+    permission_required = "django_paie.change_paiementsalarial"
+
     def post(self, request, pk):
         try:
             paiement = PaiementSalarial.objects.get(pk=pk)
         except PaiementSalarial.DoesNotExist:
             return _json_error("Paiement introuvable.", 404)
+        if paie_settings.MODE_PAR_ENTREPRISE:
+            uid = getattr(request.user, "entreprise_id", "")
+            if uid and paiement.echeance.entreprise_id != uid:
+                return _json_error("Accès refusé.", 403)
         try:
             paiement.annuler()
         except Exception as e:
@@ -259,16 +298,18 @@ class PaiementAnnulerAPI(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class AvanceAPI(View):
+class AvanceAPI(APIView):
+    permission_required = "django_paie.add_paiementsalarial"
+
     def post(self, request):
         data = _parse_json(request)
         if not data:
             return _json_error("Corps JSON requis.")
 
         employe_id = data.get("employe_id")
-        periode_source = data.get("periode_source")
         montant = _decimal(data.get("montant", 0))
-        if not all([employe_id, periode_source, montant]):
+        periode_source = data.get("periode_source")
+        if not all([employe_id, montant, periode_source]):
             return _json_error("employe_id, periode_source, montant requis.")
 
         from django.apps import apps
@@ -278,7 +319,8 @@ class AvanceAPI(View):
         except model.DoesNotExist:
             return _json_error(f"Employé {employe_id} introuvable.", 404)
 
-        service = ModeSimpleService(entreprise_id=_get_entreprise_id(request))
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
+        service = ModeSimpleService(entreprise_id=entreprise_id)
         try:
             paiement = service.enregistrer_paiement(
                 employe=employe,
@@ -286,6 +328,7 @@ class AvanceAPI(View):
                 montant=montant,
                 date_paiement=_parse_date(data.get("date_paiement")),
                 type_paiement="AVANCE",
+                periode_cible=data.get("periode_cible"),
                 notes=data.get("notes", ""),
             )
         except ValueError as e:
@@ -294,7 +337,9 @@ class AvanceAPI(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class BulletinCalculAPI(View):
+class BulletinCalculAPI(APIView):
+    permission_required = "django_paie.add_bulletinpaie"
+
     def post(self, request):
         data = _parse_json(request)
         if not data:
@@ -312,7 +357,8 @@ class BulletinCalculAPI(View):
         except model.DoesNotExist:
             return _json_error(f"Employé {employe_id} introuvable.", 404)
 
-        service = ModeCompletService(entreprise_id=_get_entreprise_id(request))
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
+        service = ModeCompletService(entreprise_id=entreprise_id)
         try:
             bulletin_dataclass, echeance = service.calculer_bulletin(employe, periode)
         except Exception as e:
@@ -322,9 +368,11 @@ class BulletinCalculAPI(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class BulletinListAPI(View):
+class BulletinListAPI(APIView):
+    permission_required = "django_paie.view_bulletinpaie"
+
     def get(self, request):
-        entreprise_id = _get_entreprise_id(request)
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
         qs = BulletinPaie.objects.select_related("echeance").all()
         if entreprise_id:
             qs = qs.filter(echeance__entreprise_id=entreprise_id)
@@ -345,7 +393,9 @@ class BulletinListAPI(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class MasseSalarialeAPI(View):
+class MasseSalarialeAPI(APIView):
+    permission_required = "django_paie.add_bulletinpaie"
+
     def post(self, request):
         data = _parse_json(request)
         if not data:
@@ -357,7 +407,8 @@ class MasseSalarialeAPI(View):
         if not employes_ids:
             return _json_error("employes_ids requis (liste).")
 
-        service = ModeCompletService(entreprise_id=_get_entreprise_id(request))
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
+        service = ModeCompletService(entreprise_id=entreprise_id)
         resultats = service.calculer_masse(employes_ids, periode)
         succes = sum(1 for r in resultats if r["succes"])
         echec = sum(1 for r in resultats if not r["succes"])
@@ -371,9 +422,11 @@ class MasseSalarialeAPI(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class StatsResumeAPI(View):
+class StatsResumeAPI(APIView):
+    permission_required = "django_paie.view_echeancesalariale"
+
     def get(self, request):
-        entreprise_id = _get_entreprise_id(request)
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
         stats = StatistiquesPaieService(entreprise_id=entreprise_id)
         annee = request.GET.get("annee")
         if annee:
@@ -388,25 +441,31 @@ class StatsResumeAPI(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class StatsArrieresAPI(View):
+class StatsArrieresAPI(APIView):
+    permission_required = "django_paie.view_echeancesalariale"
+
     def get(self, request):
-        entreprise_id = _get_entreprise_id(request)
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
         stats = StatistiquesPaieService(entreprise_id=entreprise_id)
         return JsonResponse({"data": stats.arrieres()})
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class StatsAvancesAPI(View):
+class StatsAvancesAPI(APIView):
+    permission_required = "django_paie.view_echeancesalariale"
+
     def get(self, request):
-        entreprise_id = _get_entreprise_id(request)
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
         stats = StatistiquesPaieService(entreprise_id=entreprise_id)
         return JsonResponse({"data": stats.avances()})
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class DashboardAPI(View):
+class DashboardAPI(APIView):
+    permission_required = "django_paie.view_echeancesalariale"
+
     def get(self, request):
-        entreprise_id = _get_entreprise_id(request)
+        entreprise_id = getattr(request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
         stats = StatistiquesPaieService(entreprise_id=entreprise_id)
         annee = request.GET.get("annee")
         if annee:

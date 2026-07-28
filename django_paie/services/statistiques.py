@@ -91,14 +91,16 @@ class StatistiquesPaieService:
         resultats = []
         for m in range(1, 13):
             qs = self._base_qs().filter(mois=m, annee=annee).exclude(statut="ANNULE")
-            paye = qs.aggregate(total=Sum("montant_paye"))["total"] or 0
-            du = qs.aggregate(total=Sum("montant_net"))["total"] or 0
+            echeances = list(qs)
+            paye = sum(int(e.montant_paye) for e in echeances)
+            du = sum(int(e.montant_net) for e in echeances)
+            reste = sum(int(e.reste_a_payer) for e in echeances)
             resultats.append({
                 "mois": m,
                 "libelle": f"{m:02d}/{annee}",
                 "montant_du": du,
                 "montant_paye": paye,
-                "reste": du - paye,
+                "reste": reste,
             })
         return resultats
 

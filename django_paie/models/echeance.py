@@ -83,26 +83,27 @@ class EcheanceSalariale(models.Model):
             return
 
         today = date.today()
+        est_en_retard = today > self.date_echeance
 
         if self.montant_paye > self.montant_net:
             self.statut = "TROPPERCU"
-        elif self.montant_paye <= 0:
-            if today > self.date_echeance and not self._a_paiements_futurs():
-                self.statut = "EN_RETARD"
-            else:
-                self.statut = "A_PAYER"
-        elif self.montant_paye < self.montant_net:
-            if self._a_paiements_futurs():
-                self.statut = "PAYE_EN_AVANCE"
-            elif today > self.date_echeance:
-                self.statut = "EN_RETARD"
-            else:
-                self.statut = "PARTIELLEMENT_PAYE"
-        else:
+        elif self.montant_paye >= self.montant_net:
             if self._a_paiements_futurs():
                 self.statut = "PAYE_EN_AVANCE"
             else:
                 self.statut = "PAYE"
+        elif self.montant_paye <= 0:
+            if est_en_retard and not self._a_paiements_futurs():
+                self.statut = "EN_RETARD"
+            else:
+                self.statut = "A_PAYER"
+        else:
+            if est_en_retard:
+                self.statut = "EN_RETARD"
+            elif self._a_paiements_futurs():
+                self.statut = "PAYE_EN_AVANCE"
+            else:
+                self.statut = "PARTIELLEMENT_PAYE"
 
         self.save(update_fields=["statut", "montant_paye"])
 
