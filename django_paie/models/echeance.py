@@ -109,6 +109,9 @@ class EcheanceSalariale(models.Model):
     def _a_paiements_futurs(self):
         return self.paiements.filter(
             statut="VALIDE",
+            type_paiement="AVANCE",
+        ).exists() or self.paiements.filter(
+            statut="VALIDE",
             annee_concerne__gt=self.annee,
         ).exists() or self.paiements.filter(
             statut="VALIDE",
@@ -123,7 +126,6 @@ class PaiementSalarial(models.Model):
         ("AVANCE", "Avance"),
         ("ARRIERE", "Arriéré"),
         ("REGULARISATION", "Régularisation"),
-        ("ANNULATION", "Annulation"),
     ]
 
     STATUT_CHOICES = [
@@ -179,4 +181,4 @@ class PaiementSalarial(models.Model):
         with transaction.atomic():
             echeance = EcheanceSalariale.objects.select_for_update().get(pk=self.echeance_id)
             self.statut = "ANNULE"
-        self.save(update_fields=["statut", "montant_paye"])
+            self.save(update_fields=["statut"])

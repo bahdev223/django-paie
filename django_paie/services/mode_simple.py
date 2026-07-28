@@ -1,3 +1,4 @@
+import calendar
 from datetime import date, datetime
 from decimal import Decimal
 from django.contrib.contenttypes.models import ContentType
@@ -18,26 +19,47 @@ class ModeSimpleService:
         mois, annee = extraire_mois_annee(periode)
         if date_echeance is None:
             jour = paie_settings.JOUR_PAIEMENT
-            date_echeance = date(annee, mois, min(jour, 28))
+            dernier_jour = calendar.monthrange(annee, mois)[1]
+            date_echeance = date(annee, mois, min(jour, dernier_jour))
 
         periode_obj = PeriodePaie.from_libelle(periode, entreprise_id=self.entreprise_id)
         ct = ContentType.objects.get_for_model(employe)
 
-        echeance, created = EcheanceSalariale.objects.update_or_create(
-            employe_content_type=ct,
-            employe_object_id=str(employe.pk),
-            mois=mois,
-            annee=annee,
-            entreprise_id=self.entreprise_id,
-            defaults={
-                "date_debut": periode_obj.date_debut,
-                "date_fin": periode_obj.date_fin,
-                "date_echeance": date_echeance,
-                "montant_brut": montant_brut,
-                "montant_net": montant_net,
-                "mode": "SIMPLE",
-            },
-        )
+        with transaction.atomic():
+            if periode_obj.est_cloturee:
+                raise ValueError(
+                    f"Impossible de créer/modifier une échéance en période clôturée ({periode})."
+                )
+
+            existante = EcheanceSalariale.objects.select_for_update().filter(
+                employe_content_type=ct,
+                employe_object_id=str(employe.pk),
+                mois=mois,
+                annee=annee,
+                entreprise_id=self.entreprise_id,
+            ).first()
+
+            if existante and existante.montant_paye > 0:
+                raise ValueError(
+                    f"Impossible de modifier l'échéance {existante.periode} : "
+                    f"déjà payée ({existante.montant_paye} F CFA)."
+                )
+
+            echeance, created = EcheanceSalariale.objects.update_or_create(
+                employe_content_type=ct,
+                employe_object_id=str(employe.pk),
+                mois=mois,
+                annee=annee,
+                entreprise_id=self.entreprise_id,
+                defaults={
+                    "date_debut": periode_obj.date_debut,
+                    "date_fin": periode_obj.date_fin,
+                    "date_echeance": date_echeance,
+                    "montant_brut": montant_brut,
+                    "montant_net": montant_net,
+                    "mode": "SIMPLE",
+                },
+            )
         return echeance
 
     def enregistrer_paiement(self, echeance_id=None, montant=0, date_paiement=None, type_paiement="PAIEMENT",
@@ -52,6 +74,8 @@ class ModeSimpleService:
             elif employe and periode:
                 mois_concerne, annee_concerne = extraire_mois_annee(periode)
                 ct = ContentType.objects.get_for_model(employe)
+                periode_obj = PeriodePaie.from_libelle(periode, entreprise_id=self.entreprise_id)
+                dernier_jour = calendar.monthrange(annee_concerne, mois_concerne)[1]
                 echeance, _ = EcheanceSalariale.objects.get_or_create(
                     employe_content_type=ct,
                     employe_object_id=str(employe.pk),
@@ -59,9 +83,9 @@ class ModeSimpleService:
                     annee=annee_concerne,
                     entreprise_id=self.entreprise_id,
                     defaults={
-                        "date_debut": date(annee_concerne, mois_concerne, 1),
-                        "date_fin": date(annee_concerne, mois_concerne, 28),
-                        "date_echeance": date(annee_concerne, mois_concerne, paie_settings.JOUR_PAIEMENT),
+                        "date_debut": periode_obj.date_debut,
+                        "date_fin": periode_obj.date_fin,
+                        "date_echeance": date(annee_concerne, mois_concerne, min(paie_settings.JOUR_PAIEMENT, dernier_jour)),
                         "montant_brut": montant,
                         "montant_net": montant,
                         "mode": "SIMPLE",
@@ -76,6 +100,9 @@ class ModeSimpleService:
 
             if type_paiement == "AVANCE":
                 target_mois, target_annee = self._periode_suivante(echeance.mois, echeance.annee)
+                target_periode = f"{target_mois:02d}/{target_annee}"
+                periode_obj = PeriodePaie.from_libelle(target_periode, entreprise_id=self.entreprise_id)
+                dernier_jour = calendar.monthrange(target_annee, target_mois)[1]
                 ct = ContentType.objects.get_for_model(employe or echeance.employe)
                 emp_id = str(getattr(employe, "pk", echeance.employe_object_id))
                 target_echeance, _ = EcheanceSalariale.objects.get_or_create(
@@ -85,11 +112,11 @@ class ModeSimpleService:
                     annee=target_annee,
                     entreprise_id=self.entreprise_id,
                     defaults={
-                        "date_debut": date(target_annee, target_mois, 1),
-                        "date_fin": date(target_annee, target_mois, 28),
-                        "date_echeance": date(target_annee, target_mois, paie_settings.JOUR_PAIEMENT),
-                        "montant_brut": montant,
-                        "montant_net": montant,
+                        "date_debut": periode_obj.date_debut,
+                        "date_fin": periode_obj.date_fin,
+                        "date_echeance": date(target_annee, target_mois, min(paie_settings.JOUR_PAIEMENT, dernier_jour)),
+                        "montant_brut": echeance.montant_brut,
+                        "montant_net": echeance.montant_net,
                         "mode": "SIMPLE",
                     },
                 )

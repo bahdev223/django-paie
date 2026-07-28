@@ -1,10 +1,13 @@
 from datetime import date
+from decimal import Decimal
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 from ..complet import MoteurPaie
 from ..complet.integration import RHConnectorDjango
+from ..complet.services import CotisationService
 from ..conf import paie_settings
 from ..models import EcheanceSalariale, PeriodePaie, RubriquePaie
-from ..models.bulletin import BulletinPaie, LigneBulletin
+from ..models.bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, ValidationPaie
 from ..utils import extraire_mois_annee
 
 
@@ -20,10 +23,11 @@ class ModeCompletService:
             periode=periode,
         )
 
-        echeance = self._sauvegarder_bulletin(employe, periode, bulletin)
+        echeance = self._sauvegarder_bulletin(employe, periode, bulletin, bulletin_dataclass_originel=bulletin)
         return bulletin, echeance
 
-    def _sauvegarder_bulletin(self, employe, periode, bulletin_dataclass):
+    @transaction.atomic
+    def _sauvegarder_bulletin(self, employe, periode, bulletin_dataclass, bulletin_dataclass_originel=None):
         mois, annee = extraire_mois_annee(periode)
         periode_obj = PeriodePaie.from_libelle(periode, entreprise_id=self.entreprise_id)
         ct = ContentType.objects.get_for_model(employe)
@@ -78,16 +82,64 @@ class ModeCompletService:
                 ordre=i,
             )
 
+        self._creer_cotisations_bulletin(bulletin_model, bulletin_dataclass_originel or bulletin_dataclass, salaire_brut=montant_brut)
+
+        ValidationPaie.objects.create(
+            bulletin=bulletin_model,
+            statut=bulletin_model.statut,
+            notes=f"Bulletin créé pour {periode}",
+        )
+
         return echeance
 
-    def calculer_masse(self, employes_ids, periode):
+    def _creer_cotisations_bulletin(self, bulletin_model, bulletin_dataclass, salaire_brut):
+        cotisation_service = CotisationService()
+        codes_cotisations = {
+            "CNSS": cotisation_service.cnss,
+            "AMO": cotisation_service.amo,
+        }
+
+        bulletin_model.cotisations.all().delete()
+
+        for code, regle in codes_cotisations.items():
+            rubrique, _ = RubriquePaie.objects.get_or_create(
+                code=code,
+                defaults={
+                    "libelle": f"Cotisation {code}",
+                    "type_rubrique": "retenue",
+                },
+            )
+
+            salariale = regle.calculer_cotisation_salariale(salaire_brut)
+            patronale = regle.calculer_cotisation_patronale(salaire_brut)
+
+            CotisationBulletin.objects.create(
+                bulletin=bulletin_model,
+                rubrique=rubrique,
+                type_cotisation="SALARIALE",
+                base=salariale["base"],
+                taux=Decimal(str(salariale["taux"])),
+                montant=salariale["montant"],
+            )
+
+            if patronale["montant"] > 0:
+                CotisationBulletin.objects.create(
+                    bulletin=bulletin_model,
+                    rubrique=rubrique,
+                    type_cotisation="PATRONALE",
+                    base=patronale["base"],
+                    taux=Decimal(str(patronale["taux"])),
+                    montant=patronale["montant"],
+                )
+
+    def calculer_masse(self, employes_ids, periode, rh_stockage=None):
         resultats = []
         for eid in employes_ids:
             try:
                 from django.apps import apps
                 model = apps.get_model(paie_settings.EMPLOYE_MODEL)
                 employe = model.objects.get(pk=eid)
-                bulletin, echeance = self.calculer_bulletin(employe, periode)
+                bulletin, echeance = self.calculer_bulletin(employe, periode, rh_stockage=rh_stockage)
                 resultats.append({"employe_id": eid, "succes": True, "echeance_id": echeance.id})
             except Exception as e:
                 resultats.append({"employe_id": eid, "succes": False, "erreur": str(e)})

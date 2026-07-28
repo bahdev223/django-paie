@@ -53,7 +53,7 @@ class StatistiquesPaieService:
             "nombre_employes": qs.count(),
             "montant_du": total_du,
             "montant_paye": total_paye,
-            "reste_a_payer": total_du - total_paye,
+            "reste_a_payer": sum(e.reste_a_payer for e in echeances),
             "employes_payes": employes_payes,
             "employes_non_payes": employes_non_payes,
             "paiements_partiels": paiements_partiels,
@@ -69,13 +69,14 @@ class StatistiquesPaieService:
 
         total_du = qs.aggregate(total=Sum("montant_net"))["total"] or 0
         total_paye = qs.aggregate(total=Sum("montant_paye"))["total"] or 0
+        reste_global = sum(e.reste_a_payer for e in qs)
 
         return {
             "annee": annee,
             "total_echeances": qs.count(),
             "total_montant_du": total_du,
             "total_montant_paye": total_paye,
-            "reste_global": total_du - total_paye,
+            "reste_global": reste_global,
             "a_payer": qs.filter(statut="A_PAYER").count(),
             "paye": qs.filter(statut="PAYE").count(),
             "partiel": qs.filter(statut="PARTIELLEMENT_PAYE").count(),
@@ -102,8 +103,9 @@ class StatistiquesPaieService:
         return resultats
 
     def arrieres(self):
+        today = date.today()
         qs = self._base_qs().filter(
-            statut__in=["EN_RETARD", "PARTIELLEMENT_PAYE"]
+            Q(statut="EN_RETARD") | Q(statut="PARTIELLEMENT_PAYE", date_echeance__lt=today)
         ).exclude(statut="ANNULE")
 
         montant_total = Decimal("0")
@@ -191,22 +193,56 @@ class StatistiquesPaieService:
             "charges_salariales": int(total_brut - total_net),
         }
 
+    def _charges_patronales_reelles(self, periode):
+        try:
+            mois, annee = periode.split("/")
+            mois, annee = int(mois), int(annee)
+        except (ValueError, AttributeError):
+            return None
+
+        from ..models.bulletin import CotisationBulletin, BulletinPaie
+        qs = CotisationBulletin.objects.filter(
+            type_cotisation="PATRONALE",
+            bulletin__echeance__mois=mois,
+            bulletin__echeance__annee=annee,
+        )
+        if self.entreprise_id:
+            qs = qs.filter(bulletin__echeance__entreprise_id=self.entreprise_id)
+
+        total = qs.aggregate(total=Sum("montant"))["total"] or 0
+        details = {}
+        for cb in qs.select_related("rubrique"):
+            code = cb.rubrique.code
+            details[code] = details.get(code, 0) + cb.montant
+
+        return {"total": int(total), "details": details}
+
     def cout_employeur(self, periode):
         masse = self.masse_salariale(periode)
-        taux_cnss = Decimal("0.072")
-        taux_amo = Decimal("0.06")
-        charges_patronales_cnss = int(Decimal(str(masse["masse_brute"])) * taux_cnss)
-        charges_patronales_amo = int(Decimal(str(masse["masse_brute"])) * taux_amo)
-        total_charges = charges_patronales_cnss + charges_patronales_amo
+        charges_reelles = self._charges_patronales_reelles(periode)
+
+        if charges_reelles and charges_reelles["total"] > 0:
+            charges_patronales = charges_reelles
+            cout_total = masse["masse_brute"] + charges_reelles["total"]
+        else:
+            taux_cnss = Decimal("0.072")
+            taux_amo = Decimal("0.06")
+            charges_patronales_cnss = int(Decimal(str(masse["masse_brute"])) * taux_cnss)
+            charges_patronales_amo = int(Decimal(str(masse["masse_brute"])) * taux_amo)
+            total_charges = charges_patronales_cnss + charges_patronales_amo
+            charges_patronales = {
+                "total": total_charges,
+                "details": {"CNSS": charges_patronales_cnss, "AMO": charges_patronales_amo},
+            }
+            cout_total = masse["masse_brute"] + total_charges
 
         return {
             "periode": periode,
             "salaires_nets": masse["masse_nette"],
             "charges_salariales": masse["charges_salariales"],
-            "charges_patronales_cnss": charges_patronales_cnss,
-            "charges_patronales_amo": charges_patronales_amo,
-            "total_charges_patronales": total_charges,
-            "cout_total": masse["masse_brute"] + total_charges,
+            "charges_patronales": charges_patronales,
+            "total_charges_patronales": charges_patronales["total"],
+            "cout_total": cout_total,
         }
 
     def alertes(self):
@@ -244,7 +280,7 @@ class StatistiquesPaieService:
             })
 
         periode_courante = PeriodePaie.objects.filter(
-            mois=mois_courant, annee=annee_courante
+            mois=mois_courant, annee=annee_courante, entreprise_id=self.entreprise_id
         ).first()
         if periode_courante and not periode_courante.est_cloturee:
             alertes.append({

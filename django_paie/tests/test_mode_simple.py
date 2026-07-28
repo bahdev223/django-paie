@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from decimal import Decimal
 from django.test import TestCase
@@ -48,8 +49,12 @@ class ModeSimpleServiceTest(TestCase):
         self.assertEqual(paiement.type_paiement, "PAIEMENT")
 
     def test_enregistrer_paiement_partiel(self):
-        echeance = self.service.creer_echeance(self.employe, "09/2026", 50000)
-        self.service.enregistrer_paiement(echeance.id, 20000)
+        echeance = self.service.creer_echeance(
+            self.employe, "09/2026", 50000, date_echeance=date(2026, 9, 30),
+        )
+        self.service.enregistrer_paiement(
+            echeance.id, 20000, date_paiement=date(2026, 9, 15),
+        )
         echeance.refresh_from_db()
         self.assertEqual(echeance.montant_paye, 20000)
         self.assertEqual(echeance.statut, "PARTIELLEMENT_PAYE")
@@ -99,6 +104,65 @@ class ModeSimpleServiceTest(TestCase):
         self.assertEqual(echeance.statut, "TROPPERCU")
         self.assertEqual(echeance.trop_percu, 10000)
 
+    def test_avance_conserve_salaire_complet(self):
+        source = self.service.creer_echeance(self.employe, "07/2026", montant_brut=50000, montant_net=48000)
+        paiement = self.service.enregistrer_paiement(
+            echeance_id=source.id, montant=20000, type_paiement="AVANCE",
+        )
+        echeance_cible = paiement.echeance
+        self.assertEqual(echeance_cible.mois, 8)
+        self.assertEqual(echeance_cible.annee, 2026)
+        self.assertEqual(echeance_cible.montant_brut, 50000)
+        self.assertEqual(echeance_cible.montant_net, 48000)
+        self.assertEqual(echeance_cible.montant_paye, 20000)
+        self.assertEqual(echeance_cible.statut, "PAYE_EN_AVANCE")
+
+    def test_annulation_paiement(self):
+        echeance = self.service.creer_echeance(self.employe, "07/2026", 50000)
+        paiement = self.service.enregistrer_paiement(echeance.id, 50000)
+        echeance.refresh_from_db()
+        self.assertEqual(echeance.statut, "PAYE")
+        paiement.annuler()
+        paiement.refresh_from_db()
+        self.assertEqual(paiement.statut, "ANNULE")
+        echeance.refresh_from_db()
+        self.assertEqual(echeance.montant_paye, 0)
+        self.assertIn(echeance.statut, ["A_PAYER", "EN_RETARD"])
+
+    def test_arriere_detecte_automatiquement(self):
+        echeance = self.service.creer_echeance(self.employe, "06/2026", 50000)
+        echeance.date_fin = date(2026, 6, 30)
+        echeance.save()
+        paiement = self.service.enregistrer_paiement(
+            echeance.id, 50000, date_paiement=date(2026, 7, 15),
+        )
+        self.assertEqual(paiement.type_paiement, "ARRIERE")
+
+    def test_creer_echeance_periode_close_refuse(self):
+        periode = PeriodePaie.from_libelle("06/2026")
+        periode.est_cloturee = True
+        periode.save()
+        with self.assertRaises(ValueError):
+            self.service.creer_echeance(self.employe, "06/2026", 50000)
+
+    def test_creer_echeance_deja_payee_refuse(self):
+        echeance = self.service.creer_echeance(self.employe, "07/2026", 50000)
+        self.service.enregistrer_paiement(echeance.id, 50000)
+        with self.assertRaises(ValueError):
+            self.service.creer_echeance(self.employe, "07/2026", 60000)
+
+    def test_isolation_multi_entreprise(self):
+        service_b = ModeSimpleService(entreprise_id="ENT-B")
+        e_a = self.service.creer_echeance(self.employe, "07/2026", 50000)
+        e_b = service_b.creer_echeance(self.employe, "07/2026", 70000)
+        self.assertNotEqual(e_a.pk, e_b.pk)
+        self.assertEqual(e_a.montant_brut, 50000)
+        self.assertEqual(e_b.montant_brut, 70000)
+        dash_a = self.service.dashboard(annee=2026)
+        dash_b = service_b.dashboard(annee=2026)
+        self.assertEqual(dash_a["total_echeances"], 1)
+        self.assertEqual(dash_b["total_echeances"], 1)
+
 
 class UtilsTest(TestCase):
     def test_generer_periodes(self):
@@ -145,3 +209,64 @@ class PeriodePaieModelTest(TestCase):
         p1 = PeriodePaie.from_libelle("07/2026")
         p2 = PeriodePaie.from_libelle("07/2026")
         self.assertEqual(p1.pk, p2.pk)
+
+
+class APITest(TestCase):
+    def setUp(self):
+        self.employe = User.objects.create_user(username="api_test", password="test123")
+
+    def test_api_echeance_list(self):
+        from ..api.views import EcheanceListAPI
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        request = factory.get("/api/echeances/")
+        request.user = self.employe
+        response = EcheanceListAPI.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIn("data", data)
+        self.assertIn("count", data)
+
+    def test_api_paiement_create(self):
+        from ..api.views import PaiementListAPI
+        from django.test import RequestFactory
+        import json
+        service = ModeSimpleService()
+        echeance = service.creer_echeance(self.employe, "07/2026", 50000)
+        factory = RequestFactory()
+        request = factory.post(
+            "/api/paiements/",
+            json.dumps({"echeance_id": echeance.id, "montant": 50000}),
+            content_type="application/json",
+        )
+        request.user = self.employe
+        response = PaiementListAPI.as_view()(request)
+        self.assertEqual(response.status_code, 201)
+        data = json.loads(response.content)
+        self.assertEqual(data["data"]["montant"], 50000)
+
+
+class StatistiquesPaieServiceTest(TestCase):
+    def setUp(self):
+        self.employe = User.objects.create_user(username="fatou", password="test123")
+        self.service = ModeSimpleService()
+
+    def test_arrieres_ignore_partiel_avant_date(self):
+        echeance = self.service.creer_echeance(self.employe, "09/2026", 50000)
+        echeance.date_echeance = date(2026, 9, 30)
+        echeance.save()
+        self.service.enregistrer_paiement(echeance.id, 20000)
+        from ..services import StatistiquesPaieService
+        stats = StatistiquesPaieService()
+        arrieres = stats.arrieres()
+        self.assertEqual(arrieres["nombre_echeances"], 0)
+
+    def test_resume_annuel_reste_global_non_negatif(self):
+        echeance = self.service.creer_echeance(self.employe, "07/2026", 50000)
+        self.service.enregistrer_paiement(echeance.id, 60000)
+        from ..services import StatistiquesPaieService
+        stats = StatistiquesPaieService()
+        resume = stats.resume_annuel(annee=2026)
+        self.assertEqual(resume["reste_global"], 0)
+        self.assertEqual(resume["total_montant_du"], 50000)
+        self.assertEqual(resume["total_montant_paye"], 60000)

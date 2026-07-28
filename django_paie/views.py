@@ -74,9 +74,17 @@ class PaiementListView(PermissionRequiredMixin, EnterpriseFilterMixin, ListView)
 
 class PaiementForm(forms.Form):
     echeance = forms.ModelChoiceField(
-        queryset=EcheanceSalariale.objects.all(),
+        queryset=EcheanceSalariale.objects.none(),
         label="Échéance",
     )
+
+    def __init__(self, *args, **kwargs):
+        entreprise_id = kwargs.pop("entreprise_id", "")
+        super().__init__(*args, **kwargs)
+        qs = EcheanceSalariale.objects.all()
+        if entreprise_id:
+            qs = qs.filter(entreprise_id=entreprise_id)
+        self.fields["echeance"].queryset = qs
     montant = forms.DecimalField(label="Montant", min_value=1, max_digits=14, decimal_places=0)
     type_paiement = forms.ChoiceField(
         choices=[("", "Détection automatique")] + list(PaiementSalarial.TYPE_CHOICES),
@@ -90,14 +98,20 @@ class PaiementForm(forms.Form):
     notes = forms.CharField(label="Notes", required=False, widget=forms.Textarea)
 
 
-class PaiementCreateView(PermissionRequiredMixin, FormView):
+class PaiementCreateView(PermissionRequiredMixin, EnterpriseFilterMixin, FormView):
     template_name = "django_paie/paiement_form.html"
     form_class = PaiementForm
     success_url = reverse_lazy("django_paie:paiement-list")
     permission_required = "django_paie.add_paiementsalarial"
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["entreprise_id"] = self.get_entreprise_id()
+        return kwargs
+
     def form_valid(self, form):
-        service = ModeSimpleService()
+        entreprise_id = self.get_entreprise_id()
+        service = ModeSimpleService(entreprise_id=entreprise_id)
         service.enregistrer_paiement(
             echeance_id=form.cleaned_data["echeance"].id,
             montant=form.cleaned_data["montant"],
