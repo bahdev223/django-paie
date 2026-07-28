@@ -10,6 +10,7 @@ from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie, RubriqueP
 from ..models.bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, ValidationPaie
 from ..services import ModeSimpleService, ModeCompletService, StatistiquesPaieService
 from ..conf import paie_settings
+from .docs_content import API_DOCS
 
 
 class APIView(LoginRequiredMixin, View):
@@ -488,3 +489,10 @@ class DashboardAPI(APIView):
             res["masse_salariale"] = stats.masse_salariale(periode_courante)
             res["cout_employeur"] = stats.cout_employeur(periode_courante)
         return JsonResponse({"data": res})
+
+
+class DocsAPI(LoginRequiredMixin, View):
+    permission_required = "django_paie.view_echeancesalariale"
+
+    def get(self, request):
+        return JsonResponse({"data": API_DOCS})

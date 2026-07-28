@@ -16,4 +16,5 @@ urlpatterns = [
     path("stats/arrieres/", views.StatsArrieresAPI.as_view(), name="stats-arrieres"),
     path("stats/avances/", views.StatsAvancesAPI.as_view(), name="stats-avances"),
     path("dashboard/", views.DashboardAPI.as_view(), name="api-dashboard"),
+    path("docs/", views.DocsAPI.as_view(), name="api-docs"),
 ]
