@@ -48,7 +48,7 @@ class ModeSimpleServiceTest(TestCase):
         self.assertEqual(paiement.type_paiement, "PAIEMENT")
 
     def test_enregistrer_paiement_partiel(self):
-        echeance = self.service.creer_echeance(self.employe, "07/2026", 50000)
+        echeance = self.service.creer_echeance(self.employe, "09/2026", 50000)
         self.service.enregistrer_paiement(echeance.id, 20000)
         echeance.refresh_from_db()
         self.assertEqual(echeance.montant_paye, 20000)

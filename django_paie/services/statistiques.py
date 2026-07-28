@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 from django.db.models import Sum, Count, Q
-from ..models import EcheanceSalariale, PaiementSalarial
+from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from ..conf import paie_settings
 
 
@@ -13,6 +13,12 @@ class StatistiquesPaieService:
         qs = EcheanceSalariale.objects.all()
         if self.entreprise_id:
             qs = qs.filter(entreprise_id=self.entreprise_id)
+        return qs
+
+    def _paiements_qs(self, echeances_qs):
+        qs = PaiementSalarial.objects.filter(echeance__in=echeances_qs, statut="VALIDE")
+        if self.entreprise_id:
+            qs = qs.filter(echeance__entreprise_id=self.entreprise_id)
         return qs
 
     def resume_periode(self, periode):
@@ -30,17 +36,15 @@ class StatistiquesPaieService:
         total_paye = sum(paye_values)
 
         echeances = list(qs)
-        employes_payes = sum(1 for e in echeances if e.statut == "PAYE" or e.statut == "PAYE_EN_AVANCE")
-        employes_non_payes = sum(1 for e in echeances if e.statut == "A_PAYER" or e.statut == "EN_RETARD")
+        employes_payes = sum(1 for e in echeances if e.statut in ("PAYE", "PAYE_EN_AVANCE"))
+        employes_non_payes = sum(1 for e in echeances if e.statut in ("A_PAYER", "EN_RETARD"))
         paiements_partiels = sum(1 for e in echeances if e.statut == "PARTIELLEMENT_PAYE")
 
-        paiements_qs = PaiementSalarial.objects.filter(
-            echeance__in=qs, statut="VALIDE"
-        )
-        arrieres = paiements_qs.filter(type_paiement="ARRIERE").aggregate(
+        paiements_qs = self._paiements_qs(qs)
+        arrieres = paiements_qs.filter(type_paiement__in=("ARRIERE",)).aggregate(
             total=Sum("montant")
         )["total"] or 0
-        avances = paiements_qs.filter(type_paiement="AVANCE").aggregate(
+        avances = paiements_qs.filter(type_paiement__in=("AVANCE",)).aggregate(
             total=Sum("montant")
         )["total"] or 0
 
@@ -102,46 +106,63 @@ class StatistiquesPaieService:
             statut__in=["EN_RETARD", "PARTIELLEMENT_PAYE"]
         ).exclude(statut="ANNULE")
 
-        montant_total = sum(e.reste_a_payer for e in qs)
-        employes_ids = set(e.employe_object_id for e in qs)
-
-        plus_ancien = qs.order_by("annee", "mois").first()
-
+        montant_total = Decimal("0")
+        employes_ids = set()
         details = []
+
         for e in qs:
-            if e.reste_a_payer > 0:
+            reste = e.reste_a_payer
+            if reste > 0:
+                montant_total += reste
+                employes_ids.add(e.employe_object_id)
                 details.append({
                     "employe_id": e.employe_object_id,
                     "periode": e.periode,
                     "montant_du": e.montant_net,
                     "montant_paye": e.montant_paye,
-                    "reste": e.reste_a_payer,
+                    "reste": reste,
                 })
 
+        plus_ancien = qs.order_by("annee", "mois").first()
+
         return {
-            "nombre_echeances": qs.count(),
+            "nombre_echeances": len(details),
             "nombre_employes": len(employes_ids),
-            "montant_total": montant_total,
+            "montant_total": int(montant_total),
             "plus_ancien": plus_ancien.periode if plus_ancien else None,
             "details": details,
         }
 
     def avances(self):
+        base_qs = self._base_qs()
         paiements = PaiementSalarial.objects.filter(
-            echeance__in=self._base_qs(),
+            echeance__in=base_qs,
             type_paiement="AVANCE",
             statut="VALIDE",
         )
+        if self.entreprise_id:
+            paiements = paiements.filter(echeance__entreprise_id=self.entreprise_id)
 
         total = paiements.aggregate(total=Sum("montant"))["total"] or 0
-        employes_ids = set(
-            p.echeance.employe_object_id for p in paiements.select_related("echeance")
-        )
+        if self.entreprise_id:
+            employes_ids = set(
+                p.echeance.employe_object_id
+                for p in paiements.select_related("echeance").only(
+                    "echeance__employe_object_id"
+                )
+            )
+        else:
+            employes_ids = set(
+                p.echeance.employe_object_id
+                for p in paiements.select_related("echeance").only(
+                    "echeance__employe_object_id"
+                )
+            )
         nb_employes = len(employes_ids)
         moyenne = int(total / nb_employes) if nb_employes > 0 else 0
 
         return {
-            "montant_total": total,
+            "montant_total": int(total),
             "nombre_employes": nb_employes,
             "moyenne": moyenne,
             "nombre_paiements": paiements.count(),
@@ -163,17 +184,19 @@ class StatistiquesPaieService:
         return {
             "periode": periode,
             "nombre_bulletins": qs.count(),
-            "masse_brute": total_brut,
-            "masse_nette": total_net,
-            "total_paye": total_paye,
-            "reste_a_payer": total_net - total_paye,
-            "charges_salariales": total_brut - total_net,
+            "masse_brute": int(total_brut),
+            "masse_nette": int(total_net),
+            "total_paye": int(total_paye),
+            "reste_a_payer": int(total_net - total_paye),
+            "charges_salariales": int(total_brut - total_net),
         }
 
     def cout_employeur(self, periode):
         masse = self.masse_salariale(periode)
-        charges_patronales_cnss = int(masse["masse_brute"] * 0.072)
-        charges_patronales_amo = int(masse["masse_brute"] * 0.06)
+        taux_cnss = Decimal("0.072")
+        taux_amo = Decimal("0.06")
+        charges_patronales_cnss = int(Decimal(str(masse["masse_brute"])) * taux_cnss)
+        charges_patronales_amo = int(Decimal(str(masse["masse_brute"])) * taux_amo)
         total_charges = charges_patronales_cnss + charges_patronales_amo
 
         return {
@@ -189,6 +212,8 @@ class StatistiquesPaieService:
     def alertes(self):
         today = date.today()
         alertes = []
+        mois_courant = today.month
+        annee_courante = today.year
 
         non_payes = self._base_qs().filter(statut="A_PAYER").exclude(statut="ANNULE").count()
         if non_payes > 0:
@@ -218,11 +243,13 @@ class StatistiquesPaieService:
                 "message": f"{trop_percu} échéance(s) ont un trop-perçu.",
             })
 
-        non_cloture = self._base_qs().filter(date_cloture__isnull=True).exclude(statut="ANNULE").count()
-        if non_cloture > 150:
+        periode_courante = PeriodePaie.objects.filter(
+            mois=mois_courant, annee=annee_courante
+        ).first()
+        if periode_courante and not periode_courante.est_cloturee:
             alertes.append({
                 "type": "info",
-                "message": f"La période en cours n'est pas clôturée.",
+                "message": f"La période {periode_courante.libelle} n'est pas encore clôturée.",
             })
 
         return alertes

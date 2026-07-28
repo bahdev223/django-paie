@@ -1,9 +1,11 @@
 from datetime import date
 from django.views.generic import ListView, DetailView, TemplateView
-from django.views.generic.edit import CreateView
+from django.views.generic.edit import FormView
+from django import forms
 from django.urls import reverse_lazy
+from django.shortcuts import redirect
 from django.contrib.auth.mixins import PermissionRequiredMixin
-from .models import EcheanceSalariale, PaiementSalarial
+from .models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from .services import ModeSimpleService, StatistiquesPaieService
 from .conf import paie_settings
 
@@ -18,7 +20,11 @@ class EnterpriseFilterMixin:
         qs = super().get_queryset()
         entreprise_id = self.get_entreprise_id()
         if entreprise_id:
-            qs = qs.filter(entreprise_id=entreprise_id)
+            model = getattr(self, "model", None)
+            if model and model is PaiementSalarial:
+                qs = qs.filter(echeance__entreprise_id=entreprise_id)
+            elif entreprise_id:
+                qs = qs.filter(entreprise_id=entreprise_id)
         return qs
 
 
@@ -66,12 +72,40 @@ class PaiementListView(PermissionRequiredMixin, EnterpriseFilterMixin, ListView)
         return qs.select_related("echeance")
 
 
-class PaiementCreateView(PermissionRequiredMixin, CreateView):
-    model = PaiementSalarial
+class PaiementForm(forms.Form):
+    echeance = forms.ModelChoiceField(
+        queryset=EcheanceSalariale.objects.all(),
+        label="Échéance",
+    )
+    montant = forms.DecimalField(label="Montant", min_value=1, max_digits=14, decimal_places=0)
+    type_paiement = forms.ChoiceField(
+        choices=[("", "Détection automatique")] + list(PaiementSalarial.TYPE_CHOICES),
+        label="Type", required=False,
+    )
+    date_paiement = forms.DateField(
+        label="Date de paiement",
+        widget=forms.DateInput(attrs={"type": "date"}),
+        initial=date.today,
+    )
+    notes = forms.CharField(label="Notes", required=False, widget=forms.Textarea)
+
+
+class PaiementCreateView(PermissionRequiredMixin, FormView):
     template_name = "django_paie/paiement_form.html"
-    fields = ["echeance", "montant", "type_paiement", "date_paiement", "notes"]
+    form_class = PaiementForm
     success_url = reverse_lazy("django_paie:paiement-list")
     permission_required = "django_paie.add_paiementsalarial"
+
+    def form_valid(self, form):
+        service = ModeSimpleService()
+        service.enregistrer_paiement(
+            echeance_id=form.cleaned_data["echeance"].id,
+            montant=form.cleaned_data["montant"],
+            date_paiement=form.cleaned_data["date_paiement"],
+            type_paiement=form.cleaned_data.get("type_paiement") or "PAIEMENT",
+            notes=form.cleaned_data.get("notes", ""),
+        )
+        return redirect(self.success_url)
 
 
 class DashboardView(PermissionRequiredMixin, TemplateView):
@@ -95,10 +129,12 @@ class DashboardView(PermissionRequiredMixin, TemplateView):
         ctx["arrieres"] = stats.arrieres()
         ctx["avances"] = stats.avances()
         ctx["alertes"] = stats.alertes()
-        ctx["annee_selectionnee"] = annee or 2026
-        ctx["derniers_paiements"] = PaiementSalarial.objects.select_related(
-            "echeance"
-        ).order_by("-date_paiement")[:10]
+        ctx["annee_selectionnee"] = annee or date.today().year
+
+        paiements_qs = PaiementSalarial.objects.select_related("echeance")
+        if entreprise_id:
+            paiements_qs = paiements_qs.filter(echeance__entreprise_id=entreprise_id)
+        ctx["derniers_paiements"] = paiements_qs.order_by("-date_paiement")[:10]
 
         mode = paie_settings.get_mode(entreprise_id)
         ctx["mode"] = mode

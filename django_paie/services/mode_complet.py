@@ -3,7 +3,8 @@ from django.contrib.contenttypes.models import ContentType
 from ..complet import MoteurPaie
 from ..complet.integration import RHConnectorDjango
 from ..conf import paie_settings
-from ..models import EcheanceSalariale, PeriodePaie
+from ..models import EcheanceSalariale, PeriodePaie, RubriquePaie
+from ..models.bulletin import BulletinPaie, LigneBulletin
 from ..utils import extraire_mois_annee
 
 
@@ -22,13 +23,14 @@ class ModeCompletService:
         echeance = self._sauvegarder_bulletin(employe, periode, bulletin)
         return bulletin, echeance
 
-    def _sauvegarder_bulletin(self, employe, periode, bulletin):
+    def _sauvegarder_bulletin(self, employe, periode, bulletin_dataclass):
         mois, annee = extraire_mois_annee(periode)
         periode_obj = PeriodePaie.from_libelle(periode, entreprise_id=self.entreprise_id)
         ct = ContentType.objects.get_for_model(employe)
 
-        montant_brut = int(bulletin.total_gains())
-        montant_net = int(bulletin.net_a_payer())
+        montant_brut = int(bulletin_dataclass.total_gains())
+        montant_net = int(bulletin_dataclass.net_a_payer())
+        total_retenues = int(bulletin_dataclass.total_retenues())
 
         echeance, _ = EcheanceSalariale.objects.update_or_create(
             employe_content_type=ct,
@@ -45,6 +47,37 @@ class ModeCompletService:
                 "mode": "COMPLET",
             },
         )
+
+        bulletin_model, _ = BulletinPaie.objects.update_or_create(
+            echeance=echeance,
+            defaults={
+                "total_gains": montant_brut,
+                "total_retenues": total_retenues,
+                "net_a_payer": montant_net,
+                "date_edition": bulletin_dataclass.date_edition,
+                "est_verrouille": bulletin_dataclass.est_verrouille,
+                "statut": "VALIDE" if bulletin_dataclass.est_verrouille else "BROUILLON",
+            },
+        )
+
+        bulletin_model.lignes.all().delete()
+        for i, ligne in enumerate(bulletin_dataclass.lignes):
+            rubrique, _ = RubriquePaie.objects.get_or_create(
+                code=ligne.rubrique_code,
+                defaults={
+                    "libelle": ligne.rubrique_code,
+                    "type_rubrique": "gain" if ligne.montant >= 0 else "retenue",
+                },
+            )
+            LigneBulletin.objects.create(
+                bulletin=bulletin_model,
+                rubrique=rubrique,
+                base=ligne.base,
+                taux=ligne.taux,
+                montant=ligne.montant,
+                ordre=i,
+            )
+
         return echeance
 
     def calculer_masse(self, employes_ids, periode):

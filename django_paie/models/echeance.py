@@ -104,7 +104,7 @@ class EcheanceSalariale(models.Model):
             else:
                 self.statut = "PAYE"
 
-        self.save(update_fields=["statut"])
+        self.save(update_fields=["statut", "montant_paye"])
 
     def _a_paiements_futurs(self):
         return self.paiements.filter(
@@ -179,4 +179,4 @@ class PaiementSalarial(models.Model):
         with transaction.atomic():
             echeance = EcheanceSalariale.objects.select_for_update().get(pk=self.echeance_id)
             self.statut = "ANNULE"
-            self.save(update_fields=["statut"])
+        self.save(update_fields=["statut", "montant_paye"])

@@ -1,5 +1,15 @@
 from django.contrib import admin
-from .models import EcheanceSalariale, PaiementSalarial, PeriodePaie, ParametrePaie
+from .models import (
+    EcheanceSalariale,
+    PaiementSalarial,
+    PeriodePaie,
+    ParametrePaie,
+    RubriquePaie,
+    BulletinPaie,
+    LigneBulletin,
+    CotisationBulletin,
+    ValidationPaie,
+)
 
 
 class PaiementSalarialInline(admin.TabularInline):
@@ -39,3 +49,40 @@ class PeriodePaieAdmin(admin.ModelAdmin):
 @admin.register(ParametrePaie)
 class ParametrePaieAdmin(admin.ModelAdmin):
     list_display = ("entreprise_id", "mode", "devise", "employe_model")
+
+
+class LigneBulletinInline(admin.TabularInline):
+    model = LigneBulletin
+    extra = 0
+    readonly_fields = ("rubrique", "base", "taux", "montant", "ordre")
+    can_delete = False
+
+
+class CotisationBulletinInline(admin.TabularInline):
+    model = CotisationBulletin
+    extra = 0
+    readonly_fields = ("rubrique", "type_cotisation", "base", "taux", "montant")
+    can_delete = False
+
+
+class ValidationPaieInline(admin.TabularInline):
+    model = ValidationPaie
+    extra = 0
+    readonly_fields = ("statut", "valide_par", "date_action", "notes")
+    can_delete = False
+
+
+@admin.register(BulletinPaie)
+class BulletinPaieAdmin(admin.ModelAdmin):
+    list_display = ("echeance", "total_gains", "total_retenues", "net_a_payer", "statut", "est_verrouille")
+    list_filter = ("statut", "est_verrouille")
+    readonly_fields = ("total_gains", "total_retenues", "net_a_payer", "created_at", "updated_at")
+    inlines = [LigneBulletinInline, CotisationBulletinInline, ValidationPaieInline]
+
+
+@admin.register(RubriquePaie)
+class RubriquePaieAdmin(admin.ModelAdmin):
+    list_display = ("code", "libelle", "type_rubrique", "imposable", "cotisable", "actif", "ordre")
+    list_filter = ("type_rubrique", "actif", "imposable", "cotisable")
+    search_fields = ("code", "libelle")
+    list_editable = ("actif", "ordre")

@@ -5,4 +5,5 @@ DJANGO_PAIE_DEFAULTS = {
     "ABSENCE_MODEL": None,
     "DEVISE": "XOF",
     "MODE_PAR_ENTREPRISE": False,
+    "JOUR_PAIEMENT": 5,
 }

@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie
+from ..conf import paie_settings
 from ..utils import extraire_mois_annee
 
 
@@ -13,11 +14,12 @@ class ModeSimpleService:
     def creer_echeance(self, employe, periode, montant_brut, montant_net=None, date_echeance=None):
         if montant_net is None:
             montant_net = montant_brut
-        if date_echeance is None:
-            today = date.today()
-            date_echeance = date(today.year, today.month, 5)
 
         mois, annee = extraire_mois_annee(periode)
+        if date_echeance is None:
+            jour = paie_settings.JOUR_PAIEMENT
+            date_echeance = date(annee, mois, min(jour, 28))
+
         periode_obj = PeriodePaie.from_libelle(periode, entreprise_id=self.entreprise_id)
         ct = ContentType.objects.get_for_model(employe)
 
@@ -38,33 +40,68 @@ class ModeSimpleService:
         )
         return echeance
 
-    def enregistrer_paiement(self, echeance_id, montant, date_paiement=None, type_paiement="PAIEMENT", notes=""):
+    def enregistrer_paiement(self, echeance_id=None, montant=0, date_paiement=None, type_paiement="PAIEMENT",
+                             notes="", employe=None, periode=None):
         if date_paiement is None:
             date_paiement = date.today()
 
         with transaction.atomic():
-            echeance = (
-                EcheanceSalariale.objects
-                .select_for_update()
-                .get(pk=echeance_id)
-            )
+            if echeance_id:
+                echeance = EcheanceSalariale.objects.select_for_update().get(pk=echeance_id)
+                mois_concerne, annee_concerne = echeance.mois, echeance.annee
+            elif employe and periode:
+                mois_concerne, annee_concerne = extraire_mois_annee(periode)
+                ct = ContentType.objects.get_for_model(employe)
+                echeance, _ = EcheanceSalariale.objects.get_or_create(
+                    employe_content_type=ct,
+                    employe_object_id=str(employe.pk),
+                    mois=mois_concerne,
+                    annee=annee_concerne,
+                    entreprise_id=self.entreprise_id,
+                    defaults={
+                        "date_debut": date(annee_concerne, mois_concerne, 1),
+                        "date_fin": date(annee_concerne, mois_concerne, 28),
+                        "date_echeance": date(annee_concerne, mois_concerne, paie_settings.JOUR_PAIEMENT),
+                        "montant_brut": montant,
+                        "montant_net": montant,
+                        "mode": "SIMPLE",
+                    },
+                )
+                echeance = EcheanceSalariale.objects.select_for_update().get(pk=echeance.pk)
+            else:
+                raise ValueError("Fournissez echeance_id ou (employe + periode).")
 
             if montant <= 0:
                 raise ValueError("Le montant du paiement doit être positif.")
 
-            reste = echeance.reste_a_payer
-            if reste <= 0 and type_paiement not in ("AVANCE", "REGULARISATION", "ANNULATION"):
-                raise ValueError(f"Cette échéance est déjà payée. Reste à payer : {reste}")
-
             if type_paiement == "AVANCE":
-                mois_concerne, annee_concerne = self._periode_suivante(echeance.mois, echeance.annee)
-            else:
-                mois_concerne, annee_concerne = echeance.mois, echeance.annee
+                target_mois, target_annee = self._periode_suivante(echeance.mois, echeance.annee)
+                ct = ContentType.objects.get_for_model(employe or echeance.employe)
+                emp_id = str(getattr(employe, "pk", echeance.employe_object_id))
+                target_echeance, _ = EcheanceSalariale.objects.get_or_create(
+                    employe_content_type=echeance.employe_content_type,
+                    employe_object_id=emp_id,
+                    mois=target_mois,
+                    annee=target_annee,
+                    entreprise_id=self.entreprise_id,
+                    defaults={
+                        "date_debut": date(target_annee, target_mois, 1),
+                        "date_fin": date(target_annee, target_mois, 28),
+                        "date_echeance": date(target_annee, target_mois, paie_settings.JOUR_PAIEMENT),
+                        "montant_brut": montant,
+                        "montant_net": montant,
+                        "mode": "SIMPLE",
+                    },
+                )
+                echeance = EcheanceSalariale.objects.select_for_update().get(pk=target_echeance.pk)
+                mois_concerne, annee_concerne = target_mois, target_annee
+
+            type_detecte = self._detecter_type_paiement(echeance, date_paiement, mois_concerne, annee_concerne)
 
             paiement = PaiementSalarial.objects.create(
                 echeance=echeance,
                 montant=montant,
-                type_paiement=self._detecter_type_paiement(echeance, date_paiement, mois_concerne, annee_concerne),
+                type_paiement=type_paiement if type_paiement != "PAIEMENT" else type_detecte,
                 date_paiement=date_paiement,
                 mois_concerne=mois_concerne,
                 annee_concerne=annee_concerne,
@@ -78,10 +115,9 @@ class ModeSimpleService:
         return mois + 1, annee
 
     def _detecter_type_paiement(self, echeance, date_paiement, mois_concerne, annee_concerne):
-        if (annee_concerne, mois_concerne) > (echeance.annee, echeance.mois):
+        if (annee_concerne, mois_concerne) > (date_paiement.year, date_paiement.month):
             return "AVANCE"
-        periode_fin = echeance.date_fin
-        if date_paiement > periode_fin:
+        if date_paiement > echeance.date_fin:
             return "ARRIERE"
         return "PAIEMENT"
 
