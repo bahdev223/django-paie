@@ -1,9 +1,10 @@
+from datetime import date
 from django.views.generic import ListView, DetailView, TemplateView
 from django.views.generic.edit import CreateView
 from django.urls import reverse_lazy
 from django.contrib.auth.mixins import PermissionRequiredMixin
 from .models import EcheanceSalariale, PaiementSalarial
-from .services import ModeSimpleService
+from .services import ModeSimpleService, StatistiquesPaieService
 from .conf import paie_settings
 
 
@@ -40,6 +41,11 @@ class EcheanceListView(PermissionRequiredMixin, EnterpriseFilterMixin, ListView)
                 pass
         return qs.select_related("employe_content_type")
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["statut_choices"] = EcheanceSalariale.STATUT_CHOICES
+        return ctx
+
 
 class EcheanceDetailView(PermissionRequiredMixin, EnterpriseFilterMixin, DetailView):
     model = EcheanceSalariale
@@ -75,9 +81,30 @@ class DashboardView(PermissionRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         entreprise_id = getattr(self.request.user, "entreprise_id", "") if paie_settings.MODE_PAR_ENTREPRISE else ""
-        service = ModeSimpleService(entreprise_id=entreprise_id)
-        ctx["dashboard"] = service.dashboard()
+
+        stats = StatistiquesPaieService(entreprise_id=entreprise_id)
+        annee = self.request.GET.get("annee") or None
+        if annee:
+            try:
+                annee = int(annee)
+            except ValueError:
+                annee = None
+
+        ctx["resume"] = stats.resume_annuel(annee=annee)
+        ctx["evolution"] = stats.evolution_mensuelle(annee=annee)
+        ctx["arrieres"] = stats.arrieres()
+        ctx["avances"] = stats.avances()
+        ctx["alertes"] = stats.alertes()
+        ctx["annee_selectionnee"] = annee or 2026
         ctx["derniers_paiements"] = PaiementSalarial.objects.select_related(
             "echeance"
-        ).order_by("-date_paiement")[:20]
+        ).order_by("-date_paiement")[:10]
+
+        mode = paie_settings.get_mode(entreprise_id)
+        ctx["mode"] = mode
+        if mode == "COMPLET":
+            periode_courante = f"{date.today().month:02d}/{date.today().year}"
+            ctx["masse_salariale"] = stats.masse_salariale(periode_courante)
+            ctx["cout_employeur"] = stats.cout_employeur(periode_courante)
+
         return ctx

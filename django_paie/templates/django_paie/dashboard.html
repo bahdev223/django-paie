@@ -4,49 +4,147 @@
 {% block content %}
 <h1>Tableau de bord - Paie</h1>
 
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin:2rem 0;">
-  <div style="padding:1rem;background:#e3f2fd;border-radius:8px;text-align:center;">
-    <h3>{{ dashboard.total_echeances }}</h3>
-    <p>Échéances</p>
+{% if alertes %}
+<div style="margin:1rem 0;">
+  {% for alerte in alertes %}
+  <div style="padding:12px 16px;margin-bottom:8px;border-radius:6px;{% if alerte.type == 'danger' %}background:#ffebee;color:#c62828;border:1px solid #ef9a9a{% elif alerte.type == 'warning' %}background:#fff8e1;color:#f57f17;border:1px solid #ffe082{% else %}background:#e3f2fd;color:#1565c0;border:1px solid #90caf9{% endif %}">
+    {{ alerte.message }}
   </div>
-  <div style="padding:1rem;background:#fce4ec;border-radius:8px;text-align:center;">
-    <h3>{{ dashboard.a_payer }}</h3>
-    <p>À payer</p>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin:1.5rem 0;">
+  <div style="padding:1rem;background:#e3f2fd;border-radius:8px;text-align:center;">
+    <h2 style="margin:0;font-size:1.8rem;">{{ resume.total_echeances }}</h2>
+    <p style="margin:4px 0 0;color:#555;">Échéances</p>
+  </div>
+  <div style="padding:1rem;background:#e8f5e9;border-radius:8px;text-align:center;">
+    <h2 style="margin:0;font-size:1.8rem;">{{ resume.total_montant_du|default:"0" }}</h2>
+    <p style="margin:4px 0 0;color:#555;">Montant dû</p>
   </div>
   <div style="padding:1rem;background:#c8e6c9;border-radius:8px;text-align:center;">
-    <h3>{{ dashboard.paye }}</h3>
-    <p>Payés</p>
+    <h2 style="margin:0;font-size:1.8rem;">{{ resume.total_montant_paye|default:"0" }}</h2>
+    <p style="margin:4px 0 0;color:#555;">Déjà payé</p>
   </div>
   <div style="padding:1rem;background:#fff3e0;border-radius:8px;text-align:center;">
-    <h3>{{ dashboard.en_retard }}</h3>
-    <p>En retard</p>
+    <h2 style="margin:0;font-size:1.8rem;">{{ resume.reste_global|default:"0" }}</h2>
+    <p style="margin:4px 0 0;color:#555;">Reste à payer</p>
   </div>
-  <div style="padding:1rem;background:#e8eaf6;border-radius:8px;text-align:center;">
-    <h3>{{ dashboard.partiel }}</h3>
-    <p>Partiels</p>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin:1.5rem 0;">
+  <div style="padding:0.8rem;background:#f1f8e9;border-radius:6px;text-align:center;">
+    <strong>{{ resume.paye }}</strong> payés
+  </div>
+  <div style="padding:0.8rem;background:#fff8e1;border-radius:6px;text-align:center;">
+    <strong>{{ resume.partiel }}</strong> partiels
+  </div>
+  <div style="padding:0.8rem;background:#fce4ec;border-radius:6px;text-align:center;">
+    <strong>{{ resume.en_retard }}</strong> en retard
+  </div>
+  <div style="padding:0.8rem;background:#f3e5f5;border-radius:6px;text-align:center;">
+    <strong>{{ resume.a_payer }}</strong> à payer
+  </div>
+</div>
+
+{% if evolution %}
+<h2>Évolution mensuelle</h2>
+<table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+  <thead>
+    <tr style="background:#f5f5f5;">
+      <th style="padding:8px;text-align:left;">Mois</th>
+      <th style="padding:8px;text-align:right;">Dû</th>
+      <th style="padding:8px;text-align:right;">Payé</th>
+      <th style="padding:8px;text-align:right;">Reste</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in evolution %}
+    <tr style="border-bottom:1px solid #e0e0e0;">
+      <td style="padding:6px;">{{ m.libelle }}</td>
+      <td style="padding:6px;text-align:right;">{{ m.montant_du }}</td>
+      <td style="padding:6px;text-align:right;">{{ m.montant_paye }}</td>
+      <td style="padding:6px;text-align:right;{% if m.reste > 0 %}color:#c62828{% endif %}">{{ m.reste }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if mode == 'COMPLET' and masse_salariale %}
+<h2>Masse salariale</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin:1rem 0;">
+  <div style="padding:0.8rem;background:#e8eaf6;border-radius:6px;text-align:center;">
+    <strong>{{ masse_salariale.masse_brute }}</strong><br>Masse brute
+  </div>
+  <div style="padding:0.8rem;background:#e8eaf6;border-radius:6px;text-align:center;">
+    <strong>{{ masse_salariale.masse_nette }}</strong><br>Masse nette
+  </div>
+  <div style="padding:0.8rem;background:#e8eaf6;border-radius:6px;text-align:center;">
+    <strong>{{ masse_salariale.charges_salariales }}</strong><br>Charges salariales
+  </div>
+</div>
+
+<h2>Coût employeur</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin:1rem 0;">
+  <div style="padding:0.8rem;background:#fce4ec;border-radius:6px;text-align:center;">
+    <strong>{{ cout_employeur.salaires_nets }}</strong><br>Salaires nets
+  </div>
+  <div style="padding:0.8rem;background:#fce4ec;border-radius:6px;text-align:center;">
+    <strong>{{ cout_employeur.total_charges_patronales }}</strong><br>Charges patronales
+  </div>
+  <div style="padding:0.8rem;background:#fce4ec;border-radius:6px;text-align:center;">
+    <strong>{{ cout_employeur.cout_total }}</strong><br>Coût total
+  </div>
+</div>
+{% endif %}
+
+<h2>Arriérés</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin:1rem 0;">
+  <div style="padding:0.8rem;background:#fff3e0;border-radius:6px;text-align:center;">
+    <strong>{{ arrieres.nombre_echeances }}</strong> échéances<br>
+    <strong>{{ arrieres.montant_total }} F CFA</strong> total
+  </div>
+  <div style="padding:0.8rem;background:#fff3e0;border-radius:6px;text-align:center;">
+    <strong>{{ arrieres.nombre_employes }}</strong> employés concernés<br>
+    {% if arrieres.plus_ancien %}Plus ancien : {{ arrieres.plus_ancien }}{% endif %}
+  </div>
+</div>
+
+<h2>Avances</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin:1rem 0;">
+  <div style="padding:0.8rem;background:#e8f5e9;border-radius:6px;text-align:center;">
+    <strong>{{ avances.montant_total }} F CFA</strong><br>Payé en avance
+  </div>
+  <div style="padding:0.8rem;background:#e8f5e9;border-radius:6px;text-align:center;">
+    <strong>{{ avances.nombre_employes }}</strong> employés<br>
+    <strong>{{ avances.moyenne }} F CFA</strong> moyenne
   </div>
 </div>
 
 <h2>Derniers paiements</h2>
-<table style="width:100%;border-collapse:collapse;">
+<table style="width:100%;border-collapse:collapse;margin:1rem 0;">
   <thead>
     <tr style="background:#f5f5f5;">
       <th style="padding:8px;text-align:left;">Employé</th>
-      <th style="padding:8px;text-align:left;">Montant</th>
+      <th style="padding:8px;text-align:right;">Montant</th>
       <th style="padding:8px;text-align:left;">Date</th>
       <th style="padding:8px;text-align:left;">Type</th>
+      <th style="padding:8px;text-align:left;">Période</th>
     </tr>
   </thead>
   <tbody>
     {% for p in derniers_paiements %}
     <tr style="border-bottom:1px solid #e0e0e0;">
       <td style="padding:8px;">{{ p.echeance.employe_object_id }}</td>
-      <td style="padding:8px;">{{ p.montant }} F CFA</td>
+      <td style="padding:8px;text-align:right;">{{ p.montant }} F CFA</td>
       <td style="padding:8px;">{{ p.date_paiement|date:"d/m/Y" }}</td>
       <td style="padding:8px;">{{ p.get_type_paiement_display }}</td>
+      <td style="padding:8px;">{{ p.echeance.periode }}</td>
     </tr>
     {% empty %}
-    <tr><td colspan="4" style="padding:8px;">Aucun paiement récent.</td></tr>
+    <tr><td colspan="5" style="padding:8px;">Aucun paiement récent.</td></tr>
     {% endfor %}
   </tbody>
 </table>
