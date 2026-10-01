@@ -235,12 +235,14 @@ class ModeCompletService(ContextePaieMixin):
             notes=f"Bulletin créé pour {periode}",
         )
 
-        bulletin_paie_calcule.send(
-            sender=BulletinPaie,
-            bulletin=bulletin_model,
-            echeance=echeance,
-            user=self.acteur,
-            entreprise=self.entreprise,
+        transaction.on_commit(
+            lambda b=bulletin_model, e=echeance: bulletin_paie_calcule.send(
+                sender=BulletinPaie,
+                bulletin=b,
+                echeance=e,
+                user=self.acteur,
+                entreprise=self.entreprise,
+            )
         )
         journaliser_paie(
             action="bulletin_calcule",
