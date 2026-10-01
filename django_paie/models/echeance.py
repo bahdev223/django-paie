@@ -77,7 +77,7 @@ class EcheanceSalariale(ContexteEntrepriseModel):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_echeancesalariale_ent_coherent",
+                name="paie_ech_ent_coherent",
             ),
             models.UniqueConstraint(
                 fields=[
