@@ -27,6 +27,13 @@ class PeriodePaie(ContexteEntrepriseModel):
         verbose_name = "Période de paie"
         verbose_name_plural = "Périodes de paie"
         constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_periodepaie_ent_coherent",
+            ),
             models.UniqueConstraint(
                 fields=["mois", "annee", "entreprise_source", "entreprise_reference"],
                 name="paie_periode_unique_entreprise",
