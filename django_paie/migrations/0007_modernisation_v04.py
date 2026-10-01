@@ -360,6 +360,12 @@ class Migration(migrations.Migration):
                     models.CharField(blank=True, max_length=240),
                 ),
                 (
+                    "entreprise_id",
+                    models.CharField(
+                        blank=True, db_index=True, default="", max_length=255
+                    ),
+                ),
+                (
                     "action",
                     models.CharField(db_index=True, max_length=80),
                 ),
@@ -403,5 +409,76 @@ class Migration(migrations.Migration):
                 "verbose_name_plural": "Événements de paie",
                 "ordering": ["-cree_le", "-id"],
             },
+        ),
+
+        migrations.AddConstraint(
+            model_name="echeancesalariale",
+            constraint=models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_echeancesalariale_ent_coherent",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="periodepaie",
+            constraint=models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_periodepaie_ent_coherent",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="parametrepaie",
+            constraint=models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_parametrepaie_ent_coherent",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="reglepaie",
+            constraint=models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_reglepaie_ent_coherent",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="variablepaiemensuelle",
+            constraint=models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_variablepaiemensuelle_ent_coherent",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="rubriquepaie",
+            constraint=models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_rubriquepaie_ent_coherent",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="evenementpaie",
+            constraint=models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_evenementpaie_ent_coherent",
+            ),
         ),
     ]
