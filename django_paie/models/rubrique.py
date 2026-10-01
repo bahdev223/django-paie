@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from .entreprise import ContexteEntrepriseModel
 
 
@@ -27,5 +28,48 @@ class RubriquePaie(ContexteEntrepriseModel):
             ),
         ]
 
+    @classmethod
+    def actives_pour(cls, entreprise_source="", entreprise_reference=""):
+        globales = list(
+            cls.objects.filter(
+                actif=True,
+                entreprise_source="",
+                entreprise_reference="",
+            ).order_by("ordre", "code")
+        )
+        if not entreprise_reference:
+            return globales
+
+        specifiques = list(
+            cls.objects.filter(
+                actif=True,
+                entreprise_source=entreprise_source,
+                entreprise_reference=entreprise_reference,
+            ).order_by("ordre", "code")
+        )
+        par_code = {rubrique.code: rubrique for rubrique in globales}
+        par_code.update({rubrique.code: rubrique for rubrique in specifiques})
+        return sorted(par_code.values(), key=lambda r: (r.ordre, r.code))
+
+    @classmethod
+    def pour_code(cls, code, entreprise_source="", entreprise_reference=""):
+        if entreprise_reference:
+            specifique = cls.objects.filter(
+                code=code,
+                entreprise_source=entreprise_source,
+                entreprise_reference=entreprise_reference,
+            ).first()
+            if specifique:
+                return specifique
+        return cls.objects.filter(
+            code=code,
+            entreprise_source="",
+            entreprise_reference="",
+        ).first()
+
     def __str__(self):
-        return f"{self.code} - {self.libelle}"
+        suffixe = (
+            f" [{self.entreprise_reference}]"
+            if self.entreprise_reference else " [global]"
+        )
+        return f"{self.code} - {self.libelle}{suffixe}"
