@@ -22,6 +22,13 @@ class RubriquePaie(ContexteEntrepriseModel):
         verbose_name_plural = "Rubriques de paie"
         ordering = ["ordre", "code"]
         constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_rubriquepaie_ent_coherent",
+            ),
             models.UniqueConstraint(
                 fields=["entreprise_source", "entreprise_reference", "code"],
                 name="paie_rubrique_code_unique_entreprise",
