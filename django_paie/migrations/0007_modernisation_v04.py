@@ -210,15 +210,15 @@ class Migration(migrations.Migration):
         ),
         migrations.RemoveIndex(
             model_name="echeancesalariale",
-            name="django_paie_employe_content_type_employe_object_id_idx",
+            name="django_paie_employe_f40cfa_idx",
         ),
         migrations.RemoveIndex(
             model_name="echeancesalariale",
-            name="django_paie_entreprise_id_statut_idx",
+            name="django_paie_entrepr_fd7f96_idx",
         ),
         migrations.RemoveIndex(
             model_name="echeancesalariale",
-            name="django_paie_annee_mois_entreprise_id_idx",
+            name="django_paie_annee_36b2f5_idx",
         ),
         migrations.AddIndex(
             model_name="echeancesalariale",
