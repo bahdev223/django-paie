@@ -32,7 +32,7 @@ class EvenementPaie(ContexteEntrepriseModel):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_evenementpaie_ent_coherent",
+                name="paie_evt_ent_coherent",
             ),
         ]
 
