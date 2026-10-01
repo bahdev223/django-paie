@@ -38,7 +38,12 @@ class ContexteEntrepriseModel(models.Model):
         if hasattr(self, "entreprise_id"):
             legacy = getattr(self, "entreprise_id", "")
             if self.entreprise_reference:
-                setattr(self, "entreprise_id", self.entreprise_reference)
+                legacy_value = (
+                    self.entreprise_reference
+                    if self.entreprise_source == "legacy"
+                    else f"{self.entreprise_source}:{self.entreprise_reference}"
+                )
+                setattr(self, "entreprise_id", legacy_value)
             elif legacy:
                 self.entreprise_source = self.entreprise_source or "legacy"
                 self.entreprise_reference = str(legacy)
