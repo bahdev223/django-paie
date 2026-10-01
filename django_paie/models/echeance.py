@@ -3,9 +3,10 @@ from decimal import Decimal
 from django.db import models, transaction
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from .entreprise import ContexteEntrepriseModel
 
 
-class EcheanceSalariale(models.Model):
+class EcheanceSalariale(ContexteEntrepriseModel):
     STATUT_CHOICES = [
         ("A_PAYER", "À payer"),
         ("PARTIELLEMENT_PAYE", "Partiellement payé"),
@@ -40,6 +41,14 @@ class EcheanceSalariale(models.Model):
 
     entreprise_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
 
+    employe_matricule_snapshot = models.CharField(max_length=120, blank=True, default="")
+    employe_nom_snapshot = models.CharField(max_length=240, blank=True, default="")
+    poste_snapshot = models.CharField(max_length=240, blank=True, default="")
+    departement_snapshot = models.CharField(max_length=240, blank=True, default="")
+    salaire_contractuel_snapshot = models.DecimalField(
+        max_digits=14, decimal_places=0, null=True, blank=True
+    )
+
     notes = models.TextField(blank=True, default="")
     date_cloture = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -50,11 +59,17 @@ class EcheanceSalariale(models.Model):
         verbose_name_plural = "Échéances salariales"
         indexes = [
             models.Index(fields=["employe_content_type", "employe_object_id"]),
-            models.Index(fields=["entreprise_id", "statut"]),
-            models.Index(fields=["annee", "mois", "entreprise_id"]),
+            models.Index(fields=["entreprise_source", "entreprise_reference", "statut"]),
+            models.Index(fields=["annee", "mois", "entreprise_source", "entreprise_reference"]),
         ]
-        unique_together = ["employe_content_type", "employe_object_id", "mois", "annee", "entreprise_id"]
         constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "employe_content_type", "employe_object_id", "mois", "annee",
+                    "entreprise_source", "entreprise_reference",
+                ],
+                name="paie_echeance_unique_entreprise",
+            ),
             models.CheckConstraint(
                 condition=models.Q(mois__gte=1, mois__lte=12),
                 name="paie_echeance_mois_valide",
@@ -180,6 +195,8 @@ class PaiementSalarial(models.Model):
     mois_concerne_fin = models.CharField(max_length=7, blank=True, default="")
 
     reference = models.CharField(max_length=100, blank=True, default="")
+    cle_idempotence = models.CharField(max_length=120, blank=True, null=True, unique=True)
+    compte_reference = models.CharField(max_length=120, blank=True, default="")
     notes = models.TextField(blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
