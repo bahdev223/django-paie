@@ -32,7 +32,7 @@ class PeriodePaie(ContexteEntrepriseModel):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_periodepaie_ent_coherent",
+                name="paie_per_ent_coherent",
             ),
             models.UniqueConstraint(
                 fields=["mois", "annee", "entreprise_source", "entreprise_reference"],
