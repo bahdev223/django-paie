@@ -1,9 +1,10 @@
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+from .entreprise import ContexteEntrepriseModel
 
 
-class VariablePaieMensuelle(models.Model):
+class VariablePaieMensuelle(ContexteEntrepriseModel):
     employe_content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     employe_object_id = models.CharField(max_length=255)
     employe = GenericForeignKey("employe_content_type", "employe_object_id")
@@ -37,7 +38,8 @@ class VariablePaieMensuelle(models.Model):
                     "employe_object_id",
                     "mois",
                     "annee",
-                    "entreprise_id",
+                    "entreprise_source",
+                    "entreprise_reference",
                 ],
                 name="paie_variable_unique",
             )
