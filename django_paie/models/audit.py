@@ -26,6 +26,15 @@ class EvenementPaie(ContexteEntrepriseModel):
         ordering = ["-cree_le", "-id"]
         verbose_name = "Événement de paie"
         verbose_name_plural = "Événements de paie"
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_evenementpaie_ent_coherent",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.action} - {self.type_objet} - {self.reference or self.objet_id}"
