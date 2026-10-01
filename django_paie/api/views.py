@@ -333,7 +333,11 @@ class PaiementListAPI(APIView):
             return _json_error("Corps JSON requis.")
 
         entreprise_id = self.get_entreprise_id()
-        service = ModeSimpleService(entreprise_id=entreprise_id)
+        service = ModeSimpleService(
+            entreprise_id=entreprise_id,
+            entreprise=self.get_contexte_entreprise(),
+            acteur=request.user,
+        )
         try:
             paiement = service.enregistrer_paiement(
                 echeance_id=data.get("echeance_id"),
@@ -392,7 +396,11 @@ class AvanceAPI(APIView):
         _verifier_employe_entreprise(request, employe)
 
         entreprise_id = self.get_entreprise_id()
-        service = ModeSimpleService(entreprise_id=entreprise_id)
+        service = ModeSimpleService(
+            entreprise_id=entreprise_id,
+            entreprise=self.get_contexte_entreprise(),
+            acteur=request.user,
+        )
         try:
             paiement = service.enregistrer_paiement(
                 employe=employe,
@@ -483,7 +491,11 @@ class MasseSalarialeAPI(APIView):
             return _json_error("employes_ids requis (liste).")
 
         entreprise_id = self.get_entreprise_id()
-        service = ModeCompletService(entreprise_id=entreprise_id)
+        service = ModeCompletService(
+            entreprise_id=entreprise_id,
+            entreprise=self.get_contexte_entreprise(),
+            acteur=request.user,
+        )
         resultats = service.calculer_masse(employes_ids, periode)
         succes = sum(1 for r in resultats if r["succes"])
         echec = sum(1 for r in resultats if not r["succes"])
