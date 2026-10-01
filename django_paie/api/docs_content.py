@@ -71,7 +71,7 @@ Liste des paiements. Parametre : `?echeance_id=1`.
 ### `POST /api/paiements/`
 
 ```json
-{"echeance_id": 1, "montant": 50000, "date_paiement": "2026-07-15", "type_paiement": "PAIEMENT"}
+{"echeance_id": 1, "montant": 50000, "date_paiement": "2026-07-15", "type_paiement": "PAIEMENT", "cle_idempotence": "PAY-001", "compte_reference": "BANQUE-PRINCIPALE"}
 ```
 
 `type_paiement` : `PAIEMENT`, `AVANCE`, `ARRIERE`, `REGULARISATION` (defaut: `PAIEMENT`).
@@ -146,5 +146,7 @@ Toutes les erreurs retournent `{"error": "message"}`.
 
 ## Filtrage multi-entreprise
 
-Quand `MODE_PAR_ENTREPRISE = True`, filtre automatique par `entreprise_id`.
+Quand `MODE_PAR_ENTREPRISE = True`, le tenant est resolu cote serveur via
+`ENTREPRISE_RESOLVER`. Sans contexte entreprise valide, l'acces est refuse.
+Le fallback historique `request.user.entreprise_id` reste compatible.
 """
