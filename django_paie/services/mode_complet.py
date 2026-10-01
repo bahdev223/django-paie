@@ -14,6 +14,7 @@ from ..models.bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, V
 from ..utils import extraire_mois_annee
 from .context import ContextePaieMixin
 from .audit import journaliser_paie
+from ..signals import bulletin_paie_calcule
 
 
 class ModeCompletService(ContextePaieMixin):
@@ -234,6 +235,13 @@ class ModeCompletService(ContextePaieMixin):
             notes=f"Bulletin créé pour {periode}",
         )
 
+        bulletin_paie_calcule.send(
+            sender=BulletinPaie,
+            bulletin=bulletin_model,
+            echeance=echeance,
+            user=self.acteur,
+            entreprise=self.entreprise,
+        )
         journaliser_paie(
             action="bulletin_calcule",
             type_objet="BulletinPaie",
