@@ -5,6 +5,9 @@ from .entreprise import ContexteEntrepriseModel
 
 
 class EvenementPaie(ContexteEntrepriseModel):
+    entreprise_id = models.CharField(
+        max_length=255, blank=True, default="", db_index=True
+    )
     action = models.CharField(max_length=80, db_index=True)
     type_objet = models.CharField(max_length=80, db_index=True)
     objet_id = models.CharField(max_length=120, blank=True, default="", db_index=True)
