@@ -114,7 +114,10 @@ Créer un paiement.
   "montant": 50000,
   "date_paiement": "2026-07-15",
   "type_paiement": "PAIEMENT",
-  "notes": ""
+  "notes": "",
+  "reference": "VIR-2026-001",
+  "cle_idempotence": "PAY-ENT001-202610-42-01",
+  "compte_reference": "BANQUE-PRINCIPALE"
 }
 ```
 
@@ -250,6 +253,10 @@ Toutes les erreurs retournent `{"error": "message"}`.
 
 ## Filtrage multi-entreprise
 
-Quand `DJANGO_PAIE.MODE_PAR_ENTREPRISE = True`, l'API filtre automatiquement
-les données par `entreprise_id` de l'utilisateur connecté. Un utilisateur sans
-`entreprise_id` se voit refuser l'accès à toutes les données.
+Quand `DJANGO_PAIE["MODE_PAR_ENTREPRISE"] = True`, l'API résout le tenant côté
+serveur via `ENTREPRISE_RESOLVER`. Le contexte canonique contient
+`entreprise_source + entreprise_reference + entreprise_libelle`.
+
+Le client ne peut pas choisir son entreprise dans le payload. Sans contexte
+valide, l'accès est refusé. Le fallback historique `request.user.entreprise_id`
+reste supporté et est converti vers `source="legacy"`.
