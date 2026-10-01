@@ -1,4 +1,5 @@
 from ..tenancy import ContexteEntreprise, normaliser_contexte
+from ..conf import paie_settings
 
 
 class ContextePaieMixin:
@@ -11,6 +12,10 @@ class ContextePaieMixin:
                 contexte = ContexteEntreprise(source, reference)
             else:
                 contexte = ContexteEntreprise("legacy", texte)
+        if paie_settings.MODE_PAR_ENTREPRISE and contexte is None:
+            raise ValueError(
+                "Contexte entreprise obligatoire en mode multi-entreprise."
+            )
         self.entreprise = contexte
         self.entreprise_id = contexte.legacy_id if contexte else ""
 
