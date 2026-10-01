@@ -12,6 +12,8 @@ from ..services import ModeSimpleService, ModeCompletService, StatistiquesPaieSe
 from ..conf import paie_settings
 from ..tenancy import resoudre_entreprise
 from .docs_content import API_DOCS
+from ..signals import paiement_paie_annule, periode_paie_cloturee
+from ..services.audit import journaliser_paie
 
 
 class APIView(LoginRequiredMixin, PermissionRequiredMixin, View):
@@ -145,6 +147,9 @@ def _serialize_paiement(p):
         "mois_concerne": p.mois_concerne,
         "annee_concerne": p.annee_concerne,
         "reference": p.reference,
+        "reference": p.reference,
+        "cle_idempotence": p.cle_idempotence,
+        "compte_reference": p.compte_reference,
         "notes": p.notes,
     }
 
@@ -305,6 +310,21 @@ class EcheanceDetailAPI(APIView):
                     echeance__entreprise_id=e.entreprise_id,
                 ).update(est_verrouille=True, statut="CLOTURE")
                 e.refresh_from_db()
+            contexte = self.get_contexte_entreprise()
+            periode_paie_cloturee.send(
+                sender=PeriodePaie,
+                periode=periode,
+                user=request.user,
+                entreprise=contexte,
+            )
+            journaliser_paie(
+                action="periode_cloturee",
+                type_objet="PeriodePaie",
+                objet=periode,
+                reference=periode.libelle,
+                acteur=request.user,
+                entreprise=contexte,
+            )
             return JsonResponse({"data": _serialize_echeance(e)})
         return _json_error("Action non supportée.")
 
@@ -370,6 +390,23 @@ class PaiementAnnulerAPI(APIView):
         except Exception as e:
             return _json_error(str(e))
         paiement.refresh_from_db()
+        contexte = self.get_contexte_entreprise()
+        paiement_paie_annule.send(
+            sender=PaiementSalarial,
+            paiement=paiement,
+            echeance=paiement.echeance,
+            user=request.user,
+            entreprise=contexte,
+        )
+        journaliser_paie(
+            action="paiement_annule",
+            type_objet="PaiementSalarial",
+            objet=paiement,
+            reference=paiement.reference,
+            acteur=request.user,
+            entreprise=contexte,
+            donnees={"echeance_id": paiement.echeance_id},
+        )
         return JsonResponse({"data": _serialize_paiement(paiement)})
 
 
