@@ -10,6 +10,7 @@ from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie, RubriqueP
 from ..models.bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, ValidationPaie
 from ..services import ModeSimpleService, ModeCompletService, StatistiquesPaieService
 from ..conf import paie_settings
+from ..tenancy import resoudre_entreprise
 from .docs_content import API_DOCS
 
 
@@ -19,18 +20,23 @@ class APIView(LoginRequiredMixin, PermissionRequiredMixin, View):
 
     def dispatch(self, request, *args, **kwargs):
         if paie_settings.MODE_PAR_ENTREPRISE:
-            entreprise_id = getattr(request.user, "entreprise_id", "")
-            if not entreprise_id:
-                raise PermissionDenied("Aucune entreprise associée à cet utilisateur.")
+            self._contexte_entreprise = resoudre_entreprise(request, required=True)
+        else:
+            self._contexte_entreprise = None
         return super().dispatch(request, *args, **kwargs)
 
-    def get_entreprise_id(self):
+    def get_contexte_entreprise(self):
         if not paie_settings.MODE_PAR_ENTREPRISE:
-            return ""
-        entreprise_id = getattr(self.request.user, "entreprise_id", "")
-        if not entreprise_id:
-            raise PermissionDenied("Aucune entreprise associée à cet utilisateur.")
-        return str(entreprise_id)
+            return None
+        contexte = getattr(self, "_contexte_entreprise", None)
+        if contexte is None:
+            contexte = resoudre_entreprise(self.request, required=True)
+            self._contexte_entreprise = contexte
+        return contexte
+
+    def get_entreprise_id(self):
+        contexte = self.get_contexte_entreprise()
+        return contexte.legacy_id if contexte else ""
 
 
 def _json_error(msg, status=400):
@@ -65,10 +71,25 @@ def _parse_date(val):
 def _verifier_employe_entreprise(request, employe):
     if not paie_settings.MODE_PAR_ENTREPRISE:
         return
-    entreprise_id = getattr(request.user, "entreprise_id", "")
+    contexte = resoudre_entreprise(request, required=True)
+    source = getattr(employe, "entreprise_source", None)
+    reference = getattr(employe, "entreprise_reference", None)
+    if source is not None or reference is not None:
+        if (
+            str(source or "") != contexte.source
+            or str(reference or "") != contexte.reference
+        ):
+            raise PermissionDenied(
+                "Employé introuvable ou rattaché à une autre entreprise."
+            )
+        return
+
     champ = paie_settings.EMPLOYE_ENTREPRISE_FIELD
     valeur = getattr(employe, champ, None)
-    if valeur is None or str(valeur) != str(entreprise_id):
+    if valeur is None or str(valeur) not in {
+        contexte.reference,
+        contexte.legacy_id,
+    }:
         raise PermissionDenied(
             "Employé introuvable ou rattaché à une autre entreprise."
         )
@@ -93,6 +114,19 @@ def _serialize_echeance(e, include_paiements=False):
         "statut_display": e.get_statut_display(),
         "mode": e.mode,
         "entreprise_id": e.entreprise_id,
+        "entreprise_source": e.entreprise_source,
+        "entreprise_reference": e.entreprise_reference,
+        "entreprise_libelle": e.entreprise_libelle,
+        "employe_snapshot": {
+            "matricule": e.employe_matricule_snapshot,
+            "nom_complet": e.employe_nom_snapshot,
+            "poste": e.poste_snapshot,
+            "departement": e.departement_snapshot,
+            "salaire_contractuel": (
+                int(e.salaire_contractuel_snapshot)
+                if e.salaire_contractuel_snapshot is not None else None
+            ),
+        },
     }
     if include_paiements:
         d["paiements"] = [_serialize_paiement(p) for p in e.paiements.all()]
@@ -199,7 +233,11 @@ class EcheanceListAPI(APIView):
         _verifier_employe_entreprise(request, employe)
 
         entreprise_id = self.get_entreprise_id()
-        service = ModeSimpleService(entreprise_id=entreprise_id)
+        service = ModeSimpleService(
+            entreprise_id=entreprise_id,
+            entreprise=self.get_contexte_entreprise(),
+            acteur=request.user,
+        )
         try:
             echeance = service.creer_echeance(
                 employe=employe,
@@ -303,6 +341,9 @@ class PaiementListAPI(APIView):
                 date_paiement=_parse_date(data.get("date_paiement")),
                 type_paiement=data.get("type_paiement", "PAIEMENT"),
                 notes=data.get("notes", ""),
+                reference=data.get("reference", ""),
+                cle_idempotence=data.get("cle_idempotence"),
+                compte_reference=data.get("compte_reference", ""),
             )
         except (ValueError, EcheanceSalariale.DoesNotExist) as e:
             return _json_error(str(e))
@@ -390,7 +431,11 @@ class BulletinCalculAPI(APIView):
         _verifier_employe_entreprise(request, employe)
 
         entreprise_id = self.get_entreprise_id()
-        service = ModeCompletService(entreprise_id=entreprise_id)
+        service = ModeCompletService(
+            entreprise_id=entreprise_id,
+            entreprise=self.get_contexte_entreprise(),
+            acteur=request.user,
+        )
         try:
             bulletin_dataclass, echeance = service.calculer_bulletin(employe, periode)
         except Exception as e:
