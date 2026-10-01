@@ -20,6 +20,13 @@ class ParametrePaie(ContexteEntrepriseModel):
         verbose_name = "Paramètre de paie"
         verbose_name_plural = "Paramètres de paie"
         constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_parametrepaie_ent_coherent",
+            ),
             models.UniqueConstraint(
                 fields=["entreprise_source", "entreprise_reference"],
                 name="paie_parametre_unique_entreprise",
