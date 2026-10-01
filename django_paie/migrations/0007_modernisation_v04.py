@@ -418,7 +418,7 @@ class Migration(migrations.Migration):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_echeancesalariale_ent_coherent",
+                name="paie_ech_ent_coherent",
             ),
         ),
         migrations.AddConstraint(
@@ -428,7 +428,7 @@ class Migration(migrations.Migration):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_periodepaie_ent_coherent",
+                name="paie_per_ent_coherent",
             ),
         ),
         migrations.AddConstraint(
@@ -438,7 +438,7 @@ class Migration(migrations.Migration):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_parametrepaie_ent_coherent",
+                name="paie_par_ent_coherent",
             ),
         ),
         migrations.AddConstraint(
@@ -448,7 +448,7 @@ class Migration(migrations.Migration):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_reglepaie_ent_coherent",
+                name="paie_reg_ent_coherent",
             ),
         ),
         migrations.AddConstraint(
@@ -458,7 +458,7 @@ class Migration(migrations.Migration):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_variablepaiemensuelle_ent_coherent",
+                name="paie_var_ent_coherent",
             ),
         ),
         migrations.AddConstraint(
@@ -468,7 +468,7 @@ class Migration(migrations.Migration):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_rubriquepaie_ent_coherent",
+                name="paie_rub_ent_coherent",
             ),
         ),
         migrations.AddConstraint(
@@ -478,7 +478,7 @@ class Migration(migrations.Migration):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_evenementpaie_ent_coherent",
+                name="paie_evt_ent_coherent",
             ),
         ),
     ]
