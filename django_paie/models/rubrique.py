@@ -27,7 +27,7 @@ class RubriquePaie(ContexteEntrepriseModel):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_rubriquepaie_ent_coherent",
+                name="paie_rub_ent_coherent",
             ),
             models.UniqueConstraint(
                 fields=["entreprise_source", "entreprise_reference", "code"],
