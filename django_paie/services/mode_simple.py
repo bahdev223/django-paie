@@ -280,26 +280,28 @@ class ModeSimpleService(ContextePaieMixin):
                 cle_idempotence=cle_idempotence,
                 compte_reference=compte_reference,
             )
-        paiement_paie_enregistre.send(
-            sender=PaiementSalarial,
-            paiement=paiement,
-            echeance=paiement.echeance,
-            user=self.acteur,
-            entreprise=self.entreprise,
-        )
-        journaliser_paie(
-            action="paiement_enregistre",
-            type_objet="PaiementSalarial",
-            objet=paiement,
-            reference=paiement.reference,
-            acteur=self.acteur,
-            entreprise=self.entreprise,
-            donnees={
-                "echeance_id": paiement.echeance_id,
-                "montant": str(paiement.montant),
-                "type_paiement": paiement.type_paiement,
-            },
-        )
+            journaliser_paie(
+                action="paiement_enregistre",
+                type_objet="PaiementSalarial",
+                objet=paiement,
+                reference=paiement.reference,
+                acteur=self.acteur,
+                entreprise=self.entreprise,
+                donnees={
+                    "echeance_id": paiement.echeance_id,
+                    "montant": str(paiement.montant),
+                    "type_paiement": paiement.type_paiement,
+                },
+            )
+            transaction.on_commit(
+                lambda p=paiement: paiement_paie_enregistre.send(
+                    sender=PaiementSalarial,
+                    paiement=p,
+                    echeance=p.echeance,
+                    user=self.acteur,
+                    entreprise=self.entreprise,
+                )
+            )
         return paiement
 
     def _periode_suivante(self, mois, annee):
