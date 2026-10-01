@@ -15,7 +15,9 @@ class ContexteEntreprise:
 
     @property
     def legacy_id(self):
-        return self.reference
+        if self.source == "legacy":
+            return self.reference
+        return f"{self.source}:{self.reference}"
 
     @property
     def est_valide(self):
@@ -26,7 +28,7 @@ class ContexteEntreprise:
             "entreprise_source": self.source,
             "entreprise_reference": self.reference,
             "entreprise_libelle": self.libelle,
-            "entreprise_id": self.reference,
+            "entreprise_id": self.legacy_id,
         }
 
 
