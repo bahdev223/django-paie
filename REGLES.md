@@ -458,3 +458,60 @@ sont déjà explicitement définis dans `0001_initial`.
 - [ ] Les paiements d'avance sont attachés à la période cible
 - [ ] `GenericForeignKey` est utilisé pour l'employé
 - [ ] Les montants sont en `Decimal(max_digits=14, decimal_places=0)`
+
+
+---
+
+## 14. Modernisation v0.4
+
+### 14.1. Tenant canonique
+
+Le contexte entreprise canonique est désormais :
+
+```text
+entreprise_source + entreprise_reference + entreprise_libelle
+```
+
+`entreprise_id` est conservé uniquement comme compatibilité v0.3. Ne pas écrire
+de nouvelle logique métier reposant uniquement sur ce champ.
+
+**Règle :** en mode multi-entreprise, tous les services doivent être fail-closed :
+aucun contexte tenant = aucune opération.
+
+### 14.2. Resolver serveur
+
+Le client ne choisit jamais le tenant. Utiliser `ENTREPRISE_RESOLVER` ou le
+fallback historique `request.user.entreprise_id`.
+
+### 14.3. Rubriques
+
+Les rubriques peuvent être globales ou propres à une entreprise. Une rubrique
+spécifique portant le même code surcharge la rubrique globale.
+
+Ne jamais utiliser `RubriquePaie.objects.get(code=...)` en v0.4. Utiliser
+`RubriquePaie.pour_code(...)`.
+
+### 14.4. RH Adapter
+
+La paie ne possède pas les employés/contrats. Utiliser le contrat
+`AdaptateurRHBase` / `RHConnectorDjango`.
+
+La durée contractuelle sert au taux horaire. Les jours ouvrés viennent de RH ou
+du calendrier. Ne jamais réintroduire 22 jours ou 151,67 h comme constantes
+métier enfouies dans le moteur.
+
+### 14.5. Coût employeur
+
+Ne jamais estimer des charges patronales avec des taux codés en dur. Le coût
+employeur doit provenir des cotisations réellement calculées et versionnées.
+
+### 14.6. Intégrations externes
+
+Les signaux d'intégration doivent être émis après commit. Le journal d'audit doit
+être écrit dans la transaction métier.
+
+### 14.7. Paiements
+
+Pour toute API réessayable, fournir `cle_idempotence`. Une référence de compte
+(`compte_reference`) peut être transmise pour le raccordement à
+`django-comptes`.

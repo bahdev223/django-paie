@@ -9,29 +9,35 @@ from django.core.exceptions import PermissionDenied
 from .models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from .services import ModeSimpleService, StatistiquesPaieService
 from .conf import paie_settings
+from .tenancy import resoudre_entreprise, filtrer_par_entreprise
 
 
 class EnterpriseFilterMixin:
+    entreprise_prefix = ""
+
+    def get_contexte_entreprise(self):
+        if not paie_settings.MODE_PAR_ENTREPRISE:
+            return None
+        contexte = getattr(self, "_contexte_entreprise", None)
+        if contexte is None:
+            contexte = resoudre_entreprise(self.request, required=True)
+            self._contexte_entreprise = contexte
+        return contexte
+
     def get_entreprise_id(self):
-        if paie_settings.MODE_PAR_ENTREPRISE:
-            entreprise_id = getattr(self.request.user, "entreprise_id", "")
-            if not entreprise_id:
-                raise PermissionDenied(
-                    "Aucune entreprise associée à cet utilisateur."
-                )
-            return str(entreprise_id)
-        return ""
+        contexte = self.get_contexte_entreprise()
+        return contexte.legacy_id if contexte else ""
 
     def get_queryset(self):
         qs = super().get_queryset()
-        entreprise_id = self.get_entreprise_id()
-        if entreprise_id:
-            model = getattr(self, "model", None)
-            if model and model is PaiementSalarial:
-                qs = qs.filter(echeance__entreprise_id=entreprise_id)
-            elif entreprise_id:
-                qs = qs.filter(entreprise_id=entreprise_id)
-        return qs
+        contexte = self.get_contexte_entreprise()
+        if contexte is None:
+            return qs
+        prefix = self.entreprise_prefix
+        model = getattr(self, "model", None)
+        if model is PaiementSalarial:
+            prefix = "echeance__"
+        return filtrer_par_entreprise(qs, contexte, prefix=prefix)
 
 
 class EcheanceListView(PermissionRequiredMixin, EnterpriseFilterMixin, ListView):
@@ -85,11 +91,11 @@ class PaiementForm(forms.Form):
     )
 
     def __init__(self, *args, **kwargs):
-        entreprise_id = kwargs.pop("entreprise_id", "")
+        entreprise = kwargs.pop("entreprise", None)
         super().__init__(*args, **kwargs)
         qs = EcheanceSalariale.objects.all()
-        if entreprise_id:
-            qs = qs.filter(entreprise_id=entreprise_id)
+        if entreprise:
+            qs = filtrer_par_entreprise(qs, entreprise)
         self.fields["echeance"].queryset = qs
     montant = forms.DecimalField(label="Montant", min_value=1, max_digits=14, decimal_places=0)
     type_paiement = forms.ChoiceField(
@@ -112,12 +118,16 @@ class PaiementCreateView(PermissionRequiredMixin, EnterpriseFilterMixin, FormVie
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
-        kwargs["entreprise_id"] = self.get_entreprise_id()
+        kwargs["entreprise"] = self.get_contexte_entreprise()
         return kwargs
 
     def form_valid(self, form):
         entreprise_id = self.get_entreprise_id()
-        service = ModeSimpleService(entreprise_id=entreprise_id)
+        service = ModeSimpleService(
+            entreprise_id=entreprise_id,
+            entreprise=self.get_contexte_entreprise(),
+            acteur=self.request.user,
+        )
         service.enregistrer_paiement(
             echeance_id=form.cleaned_data["echeance"].id,
             montant=form.cleaned_data["montant"],
@@ -152,11 +162,21 @@ class DashboardView(PermissionRequiredMixin, EnterpriseFilterMixin, TemplateView
         ctx["annee_selectionnee"] = annee or date.today().year
 
         paiements_qs = PaiementSalarial.objects.select_related("echeance")
-        if entreprise_id:
-            paiements_qs = paiements_qs.filter(echeance__entreprise_id=entreprise_id)
+        contexte = self.get_contexte_entreprise()
+        if contexte:
+            paiements_qs = filtrer_par_entreprise(
+                paiements_qs,
+                contexte,
+                prefix="echeance__",
+            )
         ctx["derniers_paiements"] = paiements_qs.order_by("-date_paiement")[:10]
 
-        mode = paie_settings.get_mode(entreprise_id)
+        contexte = self.get_contexte_entreprise()
+        mode = paie_settings.get_mode(
+            entreprise_id,
+            entreprise_source=contexte.source if contexte else "",
+            entreprise_reference=contexte.reference if contexte else "",
+        )
         ctx["mode"] = mode
         if mode == "COMPLET":
             periode_courante = f"{date.today().month:02d}/{date.today().year}"

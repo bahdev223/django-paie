@@ -1,3 +1,4 @@
+import calendar
 from datetime import date
 from decimal import Decimal
 from django.contrib.contenttypes.models import ContentType
@@ -11,14 +12,22 @@ from ..conf import paie_settings
 from ..models import EcheanceSalariale, PeriodePaie, RubriquePaie, ReglePaie
 from ..models.bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, ValidationPaie
 from ..utils import extraire_mois_annee
+from .context import ContextePaieMixin
+from .audit import journaliser_paie
+from ..signals import bulletin_paie_calcule
 
 
-class ModeCompletService:
-    def __init__(self, entreprise_id=""):
-        self.entreprise_id = entreprise_id
+class ModeCompletService(ContextePaieMixin):
+    def __init__(self, entreprise_id="", entreprise=None, acteur=None):
+        self._initialiser_contexte_entreprise(entreprise_id, entreprise)
+        self.acteur = acteur
 
     def _verifier_mode(self):
-        if paie_settings.get_mode(self.entreprise_id) != "COMPLET":
+        if paie_settings.get_mode(
+            self.entreprise_id,
+            entreprise_source=self.entreprise_source,
+            entreprise_reference=self.entreprise_reference,
+        ) != "COMPLET":
             raise ValueError("Le mode COMPLET n'est pas activé.")
 
     def calculer_bulletin(self, employe, periode, rh_stockage=None):
@@ -27,8 +36,14 @@ class ModeCompletService:
         mois, annee = extraire_mois_annee(periode)
         date_calcul = date(annee, mois, 1)
         rh = RHConnectorDjango(
-            stockage_rh=rh_stockage, entreprise_id=self.entreprise_id
+            stockage_rh=rh_stockage,
+            entreprise=self.entreprise,
+            entreprise_id=self.entreprise_id,
         )
+        contrat = rh.get_contrat_actif(str(employe.pk))
+        if not contrat:
+            raise ValueError(f"Aucun contrat actif pour {employe.pk}")
+        snapshot = rh.get_snapshot_employe(employe, contrat)
         moteur = MoteurPaie(
             stockage=None,
             rh_connector=rh,
@@ -41,7 +56,10 @@ class ModeCompletService:
                     imposable=r.imposable,
                     cotisable=r.cotisable,
                 )
-                for r in RubriquePaie.objects.filter(actif=True)
+                for r in RubriquePaie.actives_pour(
+                    self.entreprise_source,
+                    self.entreprise_reference,
+                )
             ],
         )
         bulletin = moteur.calculer_bulletin(
@@ -49,22 +67,46 @@ class ModeCompletService:
             periode=periode,
         )
 
-        echeance = self._sauvegarder_bulletin(employe, periode, bulletin, bulletin_dataclass_originel=bulletin)
+        echeance = self._sauvegarder_bulletin(
+            employe,
+            periode,
+            bulletin,
+            bulletin_dataclass_originel=bulletin,
+            snapshot=snapshot,
+        )
         return bulletin, echeance
 
     def _verifier_entreprise_employe(self, employe):
         if not paie_settings.MODE_PAR_ENTREPRISE:
             return
+        source = getattr(employe, "entreprise_source", None)
+        reference = getattr(employe, "entreprise_reference", None)
+        if source is not None or reference is not None:
+            if (
+                str(source or "") != self.entreprise_source
+                or str(reference or "") != self.entreprise_reference
+            ):
+                raise ValueError(
+                    "Employé introuvable ou rattaché à une autre entreprise."
+                )
+            return
         champ = paie_settings.EMPLOYE_ENTREPRISE_FIELD
         valeur = getattr(employe, champ, None)
-        if valeur is None or str(valeur) != str(self.entreprise_id):
+        if valeur is None or str(valeur) not in {
+            str(self.entreprise_reference),
+            str(self.entreprise_id),
+        }:
             raise ValueError("Employé introuvable ou rattaché à une autre entreprise.")
 
     def _charger_regles(self, date_calcul):
         resultat = {}
         for organisme in ("CNSS", "AMO", "ITS"):
             regle = ReglePaie.pour_date(
-                organisme, date_calcul, entreprise_id=self.entreprise_id
+                organisme,
+                date_calcul,
+                entreprise_id=self.entreprise_id,
+                entreprise_source=self.entreprise_source,
+                entreprise_reference=self.entreprise_reference,
             )
             if not regle:
                 continue
@@ -81,9 +123,18 @@ class ModeCompletService:
         return resultat
 
     @transaction.atomic
-    def _sauvegarder_bulletin(self, employe, periode, bulletin_dataclass, bulletin_dataclass_originel=None):
+    def _sauvegarder_bulletin(
+        self, employe, periode, bulletin_dataclass,
+        bulletin_dataclass_originel=None, snapshot=None
+    ):
         mois, annee = extraire_mois_annee(periode)
-        periode_obj = PeriodePaie.from_libelle(periode, entreprise_id=self.entreprise_id)
+        periode_obj = PeriodePaie.from_libelle(
+            periode,
+            entreprise_id=self.entreprise_id,
+            entreprise_source=self.entreprise_source,
+            entreprise_reference=self.entreprise_reference,
+            entreprise_libelle=self.entreprise_libelle,
+        )
         if periode_obj.est_cloturee:
             raise ValueError(f"La période {periode} est clôturée.")
         ct = ContentType.objects.get_for_model(employe)
@@ -92,7 +143,8 @@ class ModeCompletService:
             echeance__employe_object_id=str(employe.pk),
             echeance__mois=mois,
             echeance__annee=annee,
-            echeance__entreprise_id=self.entreprise_id,
+            echeance__entreprise_source=self.entreprise_source,
+            echeance__entreprise_reference=self.entreprise_reference,
         ).first()
         if existant and (
             existant.est_verrouille or existant.statut in ("VALIDE", "CLOTURE")
@@ -109,16 +161,29 @@ class ModeCompletService:
         montant_net = int(bulletin_dataclass.net_a_payer())
         total_retenues = int(bulletin_dataclass.total_retenues())
 
+        dernier_jour = calendar.monthrange(annee, mois)[1]
+        date_echeance = date(
+            annee,
+            mois,
+            min(paie_settings.JOUR_PAIEMENT, dernier_jour),
+        )
+        snapshot = snapshot or {}
         echeance, _ = EcheanceSalariale.objects.update_or_create(
             employe_content_type=ct,
             employe_object_id=str(employe.pk),
             mois=mois,
             annee=annee,
-            entreprise_id=self.entreprise_id,
+            **self.entreprise_filtres(),
             defaults={
+                **self.entreprise_kwargs(),
                 "date_debut": periode_obj.date_debut,
                 "date_fin": periode_obj.date_fin,
-                "date_echeance": date.today(),
+                "date_echeance": date_echeance,
+                "employe_matricule_snapshot": snapshot.get("matricule", ""),
+                "employe_nom_snapshot": snapshot.get("nom_complet", ""),
+                "poste_snapshot": snapshot.get("poste", ""),
+                "departement_snapshot": snapshot.get("departement", ""),
+                "salaire_contractuel_snapshot": snapshot.get("salaire_contractuel"),
                 "montant_brut": montant_brut,
                 "montant_net": montant_net,
                 "mode": "COMPLET",
@@ -139,13 +204,20 @@ class ModeCompletService:
 
         bulletin_model.lignes.all().delete()
         for i, ligne in enumerate(bulletin_dataclass.lignes):
-            rubrique, _ = RubriquePaie.objects.get_or_create(
-                code=ligne.rubrique_code,
-                defaults={
-                    "libelle": ligne.rubrique_code,
-                    "type_rubrique": "gain" if ligne.montant >= 0 else "retenue",
-                },
+            rubrique = RubriquePaie.pour_code(
+                ligne.rubrique_code,
+                self.entreprise_source,
+                self.entreprise_reference,
             )
+            if rubrique is None:
+                rubrique = RubriquePaie.objects.create(
+                    entreprise_source=self.entreprise_source,
+                    entreprise_reference=self.entreprise_reference,
+                    entreprise_libelle=self.entreprise_libelle,
+                    code=ligne.rubrique_code,
+                    libelle=ligne.rubrique_code,
+                    type_rubrique="gain" if ligne.montant >= 0 else "retenue",
+                )
             LigneBulletin.objects.create(
                 bulletin=bulletin_model,
                 rubrique=rubrique,
@@ -163,12 +235,36 @@ class ModeCompletService:
             notes=f"Bulletin créé pour {periode}",
         )
 
+        transaction.on_commit(
+            lambda b=bulletin_model, e=echeance: bulletin_paie_calcule.send(
+                sender=BulletinPaie,
+                bulletin=b,
+                echeance=e,
+                user=self.acteur,
+                entreprise=self.entreprise,
+            )
+        )
+        journaliser_paie(
+            action="bulletin_calcule",
+            type_objet="BulletinPaie",
+            objet=bulletin_model,
+            reference=periode,
+            acteur=self.acteur,
+            entreprise=self.entreprise,
+            donnees={
+                "echeance_id": echeance.pk,
+                "montant_brut": str(montant_brut),
+                "montant_net": str(montant_net),
+                "statut": bulletin_model.statut,
+            },
+        )
         return echeance
 
     def _creer_cotisations_bulletin(self, bulletin_model, bulletin_dataclass, salaire_brut):
         cotisation_service = CotisationService(
             date_calcul=bulletin_model.echeance.date_debut,
             entreprise_id=self.entreprise_id,
+            entreprise=self.entreprise,
         )
         codes_cotisations = {
             "CNSS": cotisation_service.cnss,
@@ -178,13 +274,17 @@ class ModeCompletService:
         bulletin_model.cotisations.all().delete()
 
         for code, regle in codes_cotisations.items():
-            rubrique, _ = RubriquePaie.objects.get_or_create(
-                code=code,
-                defaults={
-                    "libelle": f"Cotisation {code}",
-                    "type_rubrique": "retenue",
-                },
+            rubrique = RubriquePaie.pour_code(
+                code,
+                self.entreprise_source,
+                self.entreprise_reference,
             )
+            if rubrique is None:
+                rubrique = RubriquePaie.objects.create(
+                    code=code,
+                    libelle=f"Cotisation {code}",
+                    type_rubrique="retenue",
+                )
 
             ligne_moteur = next(
                 (
@@ -218,13 +318,28 @@ class ModeCompletService:
 
     def calculer_masse(self, employes_ids, periode, rh_stockage=None):
         resultats = []
+        connecteur = RHConnectorDjango(
+            stockage_rh=rh_stockage,
+            entreprise=self.entreprise,
+            entreprise_id=self.entreprise_id,
+        )
         for eid in employes_ids:
             try:
-                from django.apps import apps
-                model = apps.get_model(paie_settings.EMPLOYE_MODEL)
-                employe = model.objects.get(pk=eid)
-                bulletin, echeance = self.calculer_bulletin(employe, periode, rh_stockage=rh_stockage)
-                resultats.append({"employe_id": eid, "succes": True, "echeance_id": echeance.id})
+                employe = connecteur.get_employe(eid)
+                bulletin, echeance = self.calculer_bulletin(
+                    employe,
+                    periode,
+                    rh_stockage=connecteur.stockage_rh,
+                )
+                resultats.append({
+                    "employe_id": eid,
+                    "succes": True,
+                    "echeance_id": echeance.id,
+                })
             except Exception as e:
-                resultats.append({"employe_id": eid, "succes": False, "erreur": str(e)})
+                resultats.append({
+                    "employe_id": eid,
+                    "succes": False,
+                    "erreur": str(e),
+                })
         return resultats

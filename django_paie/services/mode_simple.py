@@ -6,22 +6,46 @@ from django.db import transaction
 from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from ..conf import paie_settings
 from ..utils import extraire_mois_annee
+from .context import ContextePaieMixin
+from .audit import journaliser_paie
+from ..signals import paiement_paie_enregistre
 
 
-class ModeSimpleService:
-    def __init__(self, entreprise_id=""):
-        self.entreprise_id = entreprise_id
+class ModeSimpleService(ContextePaieMixin):
+    def __init__(self, entreprise_id="", entreprise=None, acteur=None):
+        self._initialiser_contexte_entreprise(entreprise_id, entreprise)
+        self.acteur = acteur
 
     def _verifier_mode(self):
-        if paie_settings.get_mode(self.entreprise_id) != "SIMPLE":
+        if paie_settings.get_mode(
+            self.entreprise_id,
+            entreprise_source=self.entreprise_source,
+            entreprise_reference=self.entreprise_reference,
+        ) != "SIMPLE":
             raise ValueError("Le mode SIMPLE n'est pas activé.")
 
     def _verifier_entreprise_employe(self, employe):
         if not paie_settings.MODE_PAR_ENTREPRISE:
             return
+        if employe is None:
+            return
+        source = getattr(employe, "entreprise_source", None)
+        reference = getattr(employe, "entreprise_reference", None)
+        if source is not None or reference is not None:
+            if (
+                str(source or "") != self.entreprise_source
+                or str(reference or "") != self.entreprise_reference
+            ):
+                raise ValueError(
+                    "Employé introuvable ou rattaché à une autre entreprise."
+                )
+            return
         champ = paie_settings.EMPLOYE_ENTREPRISE_FIELD
         valeur = getattr(employe, champ, None)
-        if valeur is None or str(valeur) != str(self.entreprise_id):
+        if valeur is None or str(valeur) not in {
+            str(self.entreprise_reference),
+            str(self.entreprise_id),
+        }:
             raise ValueError(
                 "Employé introuvable ou rattaché à une autre entreprise."
             )
@@ -30,7 +54,8 @@ class ModeSimpleService:
         if echeance.date_cloture or PeriodePaie.objects.filter(
             mois=echeance.mois,
             annee=echeance.annee,
-            entreprise_id=echeance.entreprise_id,
+            entreprise_source=echeance.entreprise_source,
+            entreprise_reference=echeance.entreprise_reference,
             est_cloturee=True,
         ).exists():
             raise ValueError(
@@ -53,7 +78,13 @@ class ModeSimpleService:
             dernier_jour = calendar.monthrange(annee, mois)[1]
             date_echeance = date(annee, mois, min(jour, dernier_jour))
 
-        periode_obj = PeriodePaie.from_libelle(periode, entreprise_id=self.entreprise_id)
+        periode_obj = PeriodePaie.from_libelle(
+            periode,
+            entreprise_id=self.entreprise_id,
+            entreprise_source=self.entreprise_source,
+            entreprise_reference=self.entreprise_reference,
+            entreprise_libelle=self.entreprise_libelle,
+        )
         ct = ContentType.objects.get_for_model(employe)
 
         with transaction.atomic():
@@ -67,7 +98,7 @@ class ModeSimpleService:
                 employe_object_id=str(employe.pk),
                 mois=mois,
                 annee=annee,
-                entreprise_id=self.entreprise_id,
+                **self.entreprise_filtres(),
             ).first()
 
             if existante and existante.montant_paye > 0:
@@ -81,8 +112,9 @@ class ModeSimpleService:
                 employe_object_id=str(employe.pk),
                 mois=mois,
                 annee=annee,
-                entreprise_id=self.entreprise_id,
+                **self.entreprise_filtres(),
                 defaults={
+                    **self.entreprise_kwargs(),
                     "date_debut": periode_obj.date_debut,
                     "date_fin": periode_obj.date_fin,
                     "date_echeance": date_echeance,
@@ -91,23 +123,52 @@ class ModeSimpleService:
                     "mode": "SIMPLE",
                 },
             )
+        journaliser_paie(
+            action="echeance_creee_ou_mise_a_jour",
+            type_objet="EcheanceSalariale",
+            objet=echeance,
+            reference=echeance.periode,
+            acteur=self.acteur,
+            entreprise=self.entreprise,
+            donnees={
+                "montant_brut": str(echeance.montant_brut),
+                "montant_net": str(echeance.montant_net),
+            },
+        )
         return echeance
 
-    def enregistrer_paiement(self, echeance_id=None, montant=0, date_paiement=None, type_paiement="PAIEMENT",
-                             notes="", employe=None, periode=None, periode_cible=None,
-                             montant_mensuel=None):
+    def enregistrer_paiement(
+        self, echeance_id=None, montant=0, date_paiement=None,
+        type_paiement="PAIEMENT", notes="", employe=None, periode=None,
+        periode_cible=None, montant_mensuel=None, cle_idempotence=None,
+        compte_reference="", reference=""
+    ):
         self._verifier_mode()
         self._verifier_entreprise_employe(employe)
         if date_paiement is None:
             date_paiement = date.today()
-        if Decimal(str(montant)) <= 0:
+        montant = Decimal(str(montant))
+        if montant <= 0:
             raise ValueError("Le montant du paiement doit être positif.")
+        if cle_idempotence:
+            existant = PaiementSalarial.objects.filter(
+                cle_idempotence=cle_idempotence
+            ).first()
+            if existant:
+                if self.entreprise and (
+                    existant.echeance.entreprise_source != self.entreprise_source
+                    or existant.echeance.entreprise_reference != self.entreprise_reference
+                ):
+                    raise ValueError(
+                        "Cette clé d'idempotence appartient à une autre entreprise."
+                    )
+                return existant
 
         with transaction.atomic():
             if echeance_id:
                 qs = EcheanceSalariale.objects.select_for_update()
-                if self.entreprise_id:
-                    qs = qs.filter(entreprise_id=self.entreprise_id)
+                if self.entreprise:
+                    qs = qs.filter(**self.entreprise_filtres())
                 try:
                     echeance = qs.get(pk=echeance_id)
                 except EcheanceSalariale.DoesNotExist:
@@ -118,15 +179,22 @@ class ModeSimpleService:
                 self._verifier_entreprise_employe(employe)
                 mois_concerne, annee_concerne = extraire_mois_annee(periode)
                 ct = ContentType.objects.get_for_model(employe)
-                periode_obj = PeriodePaie.from_libelle(periode, entreprise_id=self.entreprise_id)
+                periode_obj = PeriodePaie.from_libelle(
+                    periode,
+                    entreprise_id=self.entreprise_id,
+                    entreprise_source=self.entreprise_source,
+                    entreprise_reference=self.entreprise_reference,
+                    entreprise_libelle=self.entreprise_libelle,
+                )
                 dernier_jour = calendar.monthrange(annee_concerne, mois_concerne)[1]
                 echeance, _ = EcheanceSalariale.objects.get_or_create(
                     employe_content_type=ct,
                     employe_object_id=str(employe.pk),
                     mois=mois_concerne,
                     annee=annee_concerne,
-                    entreprise_id=self.entreprise_id,
+                    **self.entreprise_filtres(),
                     defaults={
+                        **self.entreprise_kwargs(),
                         "date_debut": periode_obj.date_debut,
                         "date_fin": periode_obj.date_fin,
                         "date_echeance": date(annee_concerne, mois_concerne, min(paie_settings.JOUR_PAIEMENT, dernier_jour)),
@@ -148,15 +216,15 @@ class ModeSimpleService:
                 if reference_net <= 0 and montant_mensuel is not None:
                     reference_brut = reference_net = Decimal(str(montant_mensuel))
                 if reference_net <= 0:
-                    reference = EcheanceSalariale.objects.filter(
+                    echeance_reference = EcheanceSalariale.objects.filter(
                         employe_content_type=echeance.employe_content_type,
                         employe_object_id=echeance.employe_object_id,
-                        entreprise_id=self.entreprise_id,
+                        **self.entreprise_filtres(),
                         montant_net__gt=0,
                     ).order_by("-annee", "-mois").first()
-                    if reference:
-                        reference_brut = reference.montant_brut
-                        reference_net = reference.montant_net
+                    if echeance_reference:
+                        reference_brut = echeance_reference.montant_brut
+                        reference_net = echeance_reference.montant_net
                 if reference_net <= 0:
                     raise ValueError(
                         "Aucun salaire de référence disponible. Fournissez montant_mensuel."
@@ -166,7 +234,13 @@ class ModeSimpleService:
                 else:
                     target_mois, target_annee = self._periode_suivante(echeance.mois, echeance.annee)
                 target_periode = f"{target_mois:02d}/{target_annee}"
-                periode_obj = PeriodePaie.from_libelle(target_periode, entreprise_id=self.entreprise_id)
+                periode_obj = PeriodePaie.from_libelle(
+                    target_periode,
+                    entreprise_id=self.entreprise_id,
+                    entreprise_source=self.entreprise_source,
+                    entreprise_reference=self.entreprise_reference,
+                    entreprise_libelle=self.entreprise_libelle,
+                )
                 dernier_jour = calendar.monthrange(target_annee, target_mois)[1]
                 ct = ContentType.objects.get_for_model(employe or echeance.employe)
                 emp_id = str(getattr(employe, "pk", echeance.employe_object_id))
@@ -177,8 +251,9 @@ class ModeSimpleService:
                     employe_object_id=emp_id,
                     mois=target_mois,
                     annee=target_annee,
-                    entreprise_id=self.entreprise_id,
+                    **self.entreprise_filtres(),
                     defaults={
+                        **self.entreprise_kwargs(),
                         "date_debut": periode_obj.date_debut,
                         "date_fin": periode_obj.date_fin,
                         "date_echeance": date(target_annee, target_mois, min(paie_settings.JOUR_PAIEMENT, dernier_jour)),
@@ -201,6 +276,31 @@ class ModeSimpleService:
                 mois_concerne=mois_concerne,
                 annee_concerne=annee_concerne,
                 notes=notes,
+                reference=reference,
+                cle_idempotence=cle_idempotence,
+                compte_reference=compte_reference,
+            )
+            journaliser_paie(
+                action="paiement_enregistre",
+                type_objet="PaiementSalarial",
+                objet=paiement,
+                reference=paiement.reference,
+                acteur=self.acteur,
+                entreprise=self.entreprise,
+                donnees={
+                    "echeance_id": paiement.echeance_id,
+                    "montant": str(paiement.montant),
+                    "type_paiement": paiement.type_paiement,
+                },
+            )
+            transaction.on_commit(
+                lambda p=paiement: paiement_paie_enregistre.send(
+                    sender=PaiementSalarial,
+                    paiement=p,
+                    echeance=p.echeance,
+                    user=self.acteur,
+                    entreprise=self.entreprise,
+                )
             )
         return paiement
 
@@ -218,6 +318,7 @@ class ModeSimpleService:
 
     def payer_plusieurs_mois(self, employe, montant, mois_debut, mois_fin, date_paiement=None):
         self._verifier_mode()
+        self._verifier_entreprise_employe(employe)
         if date_paiement is None:
             date_paiement = date.today()
 
@@ -228,7 +329,7 @@ class ModeSimpleService:
         echeances = EcheanceSalariale.objects.filter(
             employe_content_type=ct,
             employe_object_id=str(employe.pk),
-            entreprise_id=self.entreprise_id,
+            **self.entreprise_filtres(),
             annee__gte=a_debut,
             annee__lte=a_fin,
         ).order_by("annee", "mois")
@@ -279,7 +380,7 @@ class ModeSimpleService:
         echeances = EcheanceSalariale.objects.filter(
             employe_content_type=ct,
             employe_object_id=str(employe.pk),
-            entreprise_id=self.entreprise_id,
+            **self.entreprise_filtres(),
             annee=annee,
         ).exclude(statut="ANNULE")
 
@@ -290,7 +391,7 @@ class ModeSimpleService:
             annee = date.today().year
 
         qs = EcheanceSalariale.objects.filter(
-            entreprise_id=self.entreprise_id,
+            **self.entreprise_filtres(),
             annee=annee,
         ).exclude(statut="ANNULE")
 

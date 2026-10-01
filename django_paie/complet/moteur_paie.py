@@ -12,10 +12,10 @@ from .exceptions import (
     ConfigurationPaieInvalide,
 )
 from .regles import ReglesCNSS, ReglesAMO, ReglesITS
+from ..conf import paie_settings
 
 
 class MoteurPaie:
-    NB_JOURS_TRAVAILLES = 22
 
     def __init__(self, stockage=None, rh_connector=None, regles=None, rubriques=None):
         self.stockage = stockage
@@ -74,9 +74,16 @@ class MoteurPaie:
         except Exception:
             raise ErreurPeriodeInvalide(f"Période invalide : {periode}")
 
-        salaire_base = Decimal(str(getattr(contrat, "salaire_base", 0)))
-        absences = self.rh_connector.get_absences_mois(employe_id, int(annee_str), int(mois))
-        heures_travaillees = self.rh_connector.get_heures_mois(employe_id, int(annee_str), int(mois))
+        salaire_base = self._salaire_contractuel(contrat)
+        absences = self.rh_connector.get_absences_mois(
+            employe_id, int(annee_str), int(mois)
+        )
+        heures_travaillees = self.rh_connector.get_heures_mois(
+            employe_id, int(annee_str), int(mois)
+        )
+        jours_ouvres = self.rh_connector.get_jours_ouvres(
+            employe_id, int(annee_str), int(mois)
+        )
         variables = self.rh_connector.get_variables_mois(
             employe_id, int(annee_str), int(mois)
         )
@@ -84,7 +91,9 @@ class MoteurPaie:
         if variables.get("jours_absence") is not None:
             absences = variables["jours_absence"]
 
-        retenue_absence = salaire_base - self._ajuster_pour_absence(salaire_base, absences)
+        retenue_absence = salaire_base - self._ajuster_pour_absence(
+            salaire_base, absences, jours_ouvres
+        )
 
         bulletin = BulletinPaie(
             employe_id=employe_id,
@@ -101,9 +110,12 @@ class MoteurPaie:
 
         heures_sup = Decimal(str(variables.get("heures_supplementaires", 0)))
         if heures_sup > 0:
-            heures_reference = Decimal(str(heures_travaillees or "151.67"))
+            heures_reference = Decimal(str(
+                getattr(contrat, "duree_heures_mois", None)
+                or paie_settings.HEURES_MENSUELLES_DEFAUT
+            ))
             if heures_reference <= 0:
-                heures_reference = Decimal("151.67")
+                heures_reference = Decimal(str(paie_settings.HEURES_MENSUELLES_DEFAUT))
             taux_horaire = salaire_base / heures_reference
             majoration = Decimal(str(variables.get("taux_majoration_heures", "1.25")))
             montant_hsup = (heures_sup * taux_horaire * majoration).quantize(Decimal("1"))
@@ -217,10 +229,29 @@ class MoteurPaie:
             date_edition=date.today(),
         )
 
-    def _ajuster_pour_absence(self, salaire_base, jours_absence):
+    def _salaire_contractuel(self, contrat):
+        for champ in (
+            "salaire_base",
+            "salaire_brut_mensuel",
+            "salaire_mensuel",
+            "salaire_contractuel",
+        ):
+            valeur = getattr(contrat, champ, None)
+            if valeur is not None:
+                return Decimal(str(valeur))
+        raise ErreurContratInvalide(
+            "Le contrat actif ne fournit aucun salaire contractuel reconnu."
+        )
+
+    def _ajuster_pour_absence(self, salaire_base, jours_absence, jours_ouvres):
         if jours_absence <= 0:
             return salaire_base
-        taux_journalier = salaire_base / Decimal(str(self.NB_JOURS_TRAVAILLES))
+        jours_ouvres = Decimal(str(
+            jours_ouvres or paie_settings.JOURS_OUVRES_DEFAUT
+        ))
+        if jours_ouvres <= 0:
+            raise ErreurCalcul("Le nombre de jours ouvrés doit être supérieur à zéro.")
+        taux_journalier = salaire_base / jours_ouvres
         retenue = taux_journalier * Decimal(str(jours_absence))
         return (salaire_base - retenue).quantize(Decimal("1"))
 

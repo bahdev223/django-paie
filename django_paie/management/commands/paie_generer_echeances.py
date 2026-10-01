@@ -3,6 +3,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django_paie.conf import paie_settings
 from django_paie.services import ModeSimpleService
+from django_paie.tenancy import ContexteEntreprise
 
 
 class Command(BaseCommand):
@@ -17,6 +18,9 @@ class Command(BaseCommand):
         parser.add_argument(
             "--montant", type=int, help="Montant mensuel (mode SIMPLE)", default=0
         )
+        parser.add_argument("--entreprise-source", default="")
+        parser.add_argument("--entreprise-reference", default="")
+        parser.add_argument("--entreprise-libelle", default="")
 
     def handle(self, *args, **options):
         model_path = options.get("employe_model") or paie_settings.EMPLOYE_MODEL
@@ -31,7 +35,37 @@ class Command(BaseCommand):
         except LookupError:
             raise CommandError(f"Modèle introuvable : {model_path}")
 
+        source = options.get("entreprise_source", "")
+        reference = options.get("entreprise_reference", "")
+        if bool(source) != bool(reference):
+            raise CommandError(
+                "--entreprise-source et --entreprise-reference doivent être fournis ensemble."
+            )
+        entreprise = (
+            ContexteEntreprise(
+                source,
+                reference,
+                options.get("entreprise_libelle", ""),
+            )
+            if reference else None
+        )
+        if paie_settings.MODE_PAR_ENTREPRISE and entreprise is None:
+            raise CommandError(
+                "Une entreprise est obligatoire en mode multi-entreprise."
+            )
+
         employes = model.objects.all()
+        if entreprise:
+            fields = {f.name for f in model._meta.fields}
+            if {"entreprise_source", "entreprise_reference"} <= fields:
+                employes = employes.filter(
+                    entreprise_source=entreprise.source,
+                    entreprise_reference=entreprise.reference,
+                )
+            elif paie_settings.EMPLOYE_ENTREPRISE_FIELD in fields:
+                employes = employes.filter(
+                    **{paie_settings.EMPLOYE_ENTREPRISE_FIELD: entreprise.reference}
+                )
         if options.get("employe_id"):
             employes = employes.filter(pk=options["employe_id"])
 
@@ -42,7 +76,7 @@ class Command(BaseCommand):
         from datetime import date
         periode = options.get("periode") or f"{date.today().month:02d}/{date.today().year}"
 
-        service = ModeSimpleService()
+        service = ModeSimpleService(entreprise=entreprise)
         count = 0
         for emp in employes:
             montant = options["montant"]

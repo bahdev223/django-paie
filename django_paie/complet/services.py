@@ -1,12 +1,21 @@
 from decimal import Decimal
 from .regles import ReglesCNSS, ReglesAMO, ReglesITS
+from ..tenancy import ContexteEntreprise, normaliser_contexte
 
 
 class CotisationService:
-    def __init__(self, date_calcul=None, entreprise_id=""):
+    def __init__(self, date_calcul=None, entreprise_id="", entreprise=None):
         self.cnss = ReglesCNSS()
         self.amo = ReglesAMO()
         self.its = ReglesITS()
+        self.entreprise = normaliser_contexte(entreprise)
+        if self.entreprise is None and entreprise_id:
+            texte = str(entreprise_id)
+            if ":" in texte:
+                source, reference = texte.split(":", 1)
+                self.entreprise = ContexteEntreprise(source, reference)
+            else:
+                self.entreprise = ContexteEntreprise("legacy", texte)
         if date_calcul is not None:
             self._charger_regles(date_calcul, entreprise_id)
 
@@ -14,7 +23,11 @@ class CotisationService:
         from ..models import ReglePaie
         for organisme in ("CNSS", "AMO", "ITS"):
             regle = ReglePaie.pour_date(
-                organisme, date_calcul, entreprise_id=entreprise_id
+                organisme,
+                date_calcul,
+                entreprise_id=entreprise_id,
+                entreprise_source=self.entreprise.source if self.entreprise else "",
+                entreprise_reference=self.entreprise.reference if self.entreprise else "",
             )
             if not regle:
                 continue

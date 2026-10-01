@@ -18,13 +18,32 @@ class DjangoPaieSettings:
         merged.update(user_settings)
         return merged
 
-    def get_mode(self, entreprise_id=None):
-        if self.MODE_PAR_ENTREPRISE and entreprise_id:
-            from .models import ParametrePaie
-            try:
-                return ParametrePaie.objects.get(entreprise_id=entreprise_id).mode
-            except ParametrePaie.DoesNotExist:
-                return self.MODE
+    def get_mode(
+        self, entreprise_id=None, *, entreprise_source="", entreprise_reference=""
+    ):
+        if not self.MODE_PAR_ENTREPRISE:
+            return self.MODE
+
+        from .models import ParametrePaie
+
+        if entreprise_reference:
+            parametre = ParametrePaie.objects.filter(
+                entreprise_source=entreprise_source,
+                entreprise_reference=str(entreprise_reference),
+            ).first()
+            return parametre.mode if parametre else self.MODE
+
+        if entreprise_id:
+            parametre = ParametrePaie.objects.filter(
+                entreprise_source="legacy",
+                entreprise_reference=str(entreprise_id),
+            ).first()
+            if not parametre:
+                parametre = ParametrePaie.objects.filter(
+                    entreprise_id=str(entreprise_id)
+                ).first()
+            return parametre.mode if parametre else self.MODE
+
         return self.MODE
 
 

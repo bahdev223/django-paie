@@ -4,26 +4,27 @@ from django.db.models import Sum, Count, Q
 from django.core.exceptions import PermissionDenied
 from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from ..conf import paie_settings
+from .context import ContextePaieMixin
 
 
-class StatistiquesPaieService:
-    def __init__(self, entreprise_id=""):
-        if paie_settings.MODE_PAR_ENTREPRISE and not entreprise_id:
+class StatistiquesPaieService(ContextePaieMixin):
+    def __init__(self, entreprise_id="", entreprise=None):
+        self._initialiser_contexte_entreprise(entreprise_id, entreprise)
+        if paie_settings.MODE_PAR_ENTREPRISE and not self.entreprise:
             raise PermissionDenied(
                 "Aucune entreprise fournie pour les statistiques de paie."
             )
-        self.entreprise_id = entreprise_id
 
     def _base_qs(self):
         qs = EcheanceSalariale.objects.all()
-        if self.entreprise_id:
-            qs = qs.filter(entreprise_id=self.entreprise_id)
+        if self.entreprise:
+            qs = qs.filter(**self.entreprise_filtres())
         return qs
 
     def _paiements_qs(self, echeances_qs):
         qs = PaiementSalarial.objects.filter(echeance__in=echeances_qs, statut="VALIDE")
-        if self.entreprise_id:
-            qs = qs.filter(echeance__entreprise_id=self.entreprise_id)
+        if self.entreprise:
+            qs = qs.filter(**self.entreprise_filtres(prefix="echeance__"))
         return qs
 
     def resume_periode(self, periode):
@@ -149,8 +150,10 @@ class StatistiquesPaieService:
             type_paiement="AVANCE",
             statut="VALIDE",
         )
-        if self.entreprise_id:
-            paiements = paiements.filter(echeance__entreprise_id=self.entreprise_id)
+        if self.entreprise:
+            paiements = paiements.filter(
+                **self.entreprise_filtres(prefix="echeance__")
+            )
 
         total = paiements.aggregate(total=Sum("montant"))["total"] or 0
         if self.entreprise_id:
@@ -213,8 +216,10 @@ class StatistiquesPaieService:
             bulletin__echeance__mois=mois,
             bulletin__echeance__annee=annee,
         )
-        if self.entreprise_id:
-            qs = qs.filter(bulletin__echeance__entreprise_id=self.entreprise_id)
+        if self.entreprise:
+            qs = qs.filter(
+                **self.entreprise_filtres(prefix="bulletin__echeance__")
+            )
 
         total = qs.aggregate(total=Sum("montant"))["total"] or 0
         details = {}
@@ -228,20 +233,16 @@ class StatistiquesPaieService:
         masse = self.masse_salariale(periode)
         charges_reelles = self._charges_patronales_reelles(periode)
 
-        if charges_reelles and charges_reelles["total"] > 0:
-            charges_patronales = charges_reelles
-            cout_total = masse["masse_brute"] + charges_reelles["total"]
-        else:
-            taux_cnss = Decimal("0.072")
-            taux_amo = Decimal("0.06")
-            charges_patronales_cnss = int(Decimal(str(masse["masse_brute"])) * taux_cnss)
-            charges_patronales_amo = int(Decimal(str(masse["masse_brute"])) * taux_amo)
-            total_charges = charges_patronales_cnss + charges_patronales_amo
-            charges_patronales = {
-                "total": total_charges,
-                "details": {"CNSS": charges_patronales_cnss, "AMO": charges_patronales_amo},
-            }
-            cout_total = masse["masse_brute"] + total_charges
+        disponible = bool(charges_reelles and charges_reelles["total"] > 0)
+        charges_patronales = (
+            charges_reelles
+            if disponible
+            else {"total": None, "details": {}, "source": "indisponible"}
+        )
+        cout_total = (
+            masse["masse_brute"] + charges_reelles["total"]
+            if disponible else None
+        )
 
         return {
             "periode": periode,
@@ -250,6 +251,7 @@ class StatistiquesPaieService:
             "charges_patronales": charges_patronales,
             "total_charges_patronales": charges_patronales["total"],
             "cout_total": cout_total,
+            "cout_employeur_disponible": disponible,
         }
 
     def alertes(self):
@@ -287,7 +289,9 @@ class StatistiquesPaieService:
             })
 
         periode_courante = PeriodePaie.objects.filter(
-            mois=mois_courant, annee=annee_courante, entreprise_id=self.entreprise_id
+            mois=mois_courant,
+            annee=annee_courante,
+            **self.entreprise_filtres(),
         ).first()
         if periode_courante and not periode_courante.est_cloturee:
             alertes.append({
