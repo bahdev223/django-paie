@@ -72,6 +72,13 @@ class EcheanceSalariale(ContexteEntrepriseModel):
             ),
         ]
         constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(entreprise_source="", entreprise_reference="")
+                    | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
+                ),
+                name="django_paie_echeancesalariale_ent_coherent",
+            ),
             models.UniqueConstraint(
                 fields=[
                     "employe_content_type", "employe_object_id", "mois", "annee",
