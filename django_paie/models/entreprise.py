@@ -9,18 +9,6 @@ class ContexteEntrepriseModel(models.Model):
 
     class Meta:
         abstract = True
-        constraints = [
-            models.CheckConstraint(
-                condition=(
-                    models.Q(entreprise_source="", entreprise_reference="")
-                    | (
-                        ~models.Q(entreprise_source="")
-                        & ~models.Q(entreprise_reference="")
-                    )
-                ),
-                name="%(app_label)s_%(class)s_ent_coherent",
-            ),
-        ]
 
     @property
     def entreprise(self):
