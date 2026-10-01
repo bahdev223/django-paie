@@ -58,9 +58,18 @@ class EcheanceSalariale(ContexteEntrepriseModel):
         verbose_name = "Échéance salariale"
         verbose_name_plural = "Échéances salariales"
         indexes = [
-            models.Index(fields=["employe_content_type", "employe_object_id"]),
-            models.Index(fields=["entreprise_source", "entreprise_reference", "statut"]),
-            models.Index(fields=["annee", "mois", "entreprise_source", "entreprise_reference"]),
+            models.Index(
+                fields=["employe_content_type", "employe_object_id"],
+                name="paie_ech_emp_idx",
+            ),
+            models.Index(
+                fields=["entreprise_source", "entreprise_reference", "statut"],
+                name="paie_ech_ent_stat_idx",
+            ),
+            models.Index(
+                fields=["annee", "mois", "entreprise_source", "entreprise_reference"],
+                name="paie_ech_per_ent_idx",
+            ),
         ]
         constraints = [
             models.UniqueConstraint(
