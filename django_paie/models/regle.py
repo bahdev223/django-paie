@@ -32,7 +32,7 @@ class ReglePaie(ContexteEntrepriseModel):
                     models.Q(entreprise_source="", entreprise_reference="")
                     | (~models.Q(entreprise_source="") & ~models.Q(entreprise_reference=""))
                 ),
-                name="django_paie_reglepaie_ent_coherent",
+                name="paie_reg_ent_coherent",
             ),
             models.UniqueConstraint(
                 fields=[
