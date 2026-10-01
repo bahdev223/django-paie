@@ -132,7 +132,8 @@ class ModeSimpleService(ContextePaieMixin):
         self._verifier_entreprise_employe(employe)
         if date_paiement is None:
             date_paiement = date.today()
-        if Decimal(str(montant)) <= 0:
+        montant = Decimal(str(montant))
+        if montant <= 0:
             raise ValueError("Le montant du paiement doit être positif.")
         if cle_idempotence:
             existant = PaiementSalarial.objects.filter(
@@ -200,15 +201,15 @@ class ModeSimpleService(ContextePaieMixin):
                 if reference_net <= 0 and montant_mensuel is not None:
                     reference_brut = reference_net = Decimal(str(montant_mensuel))
                 if reference_net <= 0:
-                    reference = EcheanceSalariale.objects.filter(
+                    echeance_reference = EcheanceSalariale.objects.filter(
                         employe_content_type=echeance.employe_content_type,
                         employe_object_id=echeance.employe_object_id,
                         **self.entreprise_filtres(),
                         montant_net__gt=0,
                     ).order_by("-annee", "-mois").first()
-                    if reference:
-                        reference_brut = reference.montant_brut
-                        reference_net = reference.montant_net
+                    if echeance_reference:
+                        reference_brut = echeance_reference.montant_brut
+                        reference_net = echeance_reference.montant_net
                 if reference_net <= 0:
                     raise ValueError(
                         "Aucun salaire de référence disponible. Fournissez montant_mensuel."
@@ -280,6 +281,7 @@ class ModeSimpleService(ContextePaieMixin):
 
     def payer_plusieurs_mois(self, employe, montant, mois_debut, mois_fin, date_paiement=None):
         self._verifier_mode()
+        self._verifier_entreprise_employe(employe)
         if date_paiement is None:
             date_paiement = date.today()
 
