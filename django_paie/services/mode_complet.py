@@ -292,13 +292,28 @@ class ModeCompletService(ContextePaieMixin):
 
     def calculer_masse(self, employes_ids, periode, rh_stockage=None):
         resultats = []
+        connecteur = RHConnectorDjango(
+            stockage_rh=rh_stockage,
+            entreprise=self.entreprise,
+            entreprise_id=self.entreprise_id,
+        )
         for eid in employes_ids:
             try:
-                from django.apps import apps
-                model = apps.get_model(paie_settings.EMPLOYE_MODEL)
-                employe = model.objects.get(pk=eid)
-                bulletin, echeance = self.calculer_bulletin(employe, periode, rh_stockage=rh_stockage)
-                resultats.append({"employe_id": eid, "succes": True, "echeance_id": echeance.id})
+                employe = connecteur.get_employe(eid)
+                bulletin, echeance = self.calculer_bulletin(
+                    employe,
+                    periode,
+                    rh_stockage=connecteur.stockage_rh,
+                )
+                resultats.append({
+                    "employe_id": eid,
+                    "succes": True,
+                    "echeance_id": echeance.id,
+                })
             except Exception as e:
-                resultats.append({"employe_id": eid, "succes": False, "erreur": str(e)})
+                resultats.append({
+                    "employe_id": eid,
+                    "succes": False,
+                    "erreur": str(e),
+                })
         return resultats
