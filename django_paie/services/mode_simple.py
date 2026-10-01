@@ -7,11 +7,13 @@ from ..models import EcheanceSalariale, PaiementSalarial, PeriodePaie
 from ..conf import paie_settings
 from ..utils import extraire_mois_annee
 from .context import ContextePaieMixin
+from .audit import journaliser_paie
 
 
 class ModeSimpleService(ContextePaieMixin):
-    def __init__(self, entreprise_id="", entreprise=None):
+    def __init__(self, entreprise_id="", entreprise=None, acteur=None):
         self._initialiser_contexte_entreprise(entreprise_id, entreprise)
+        self.acteur = acteur
 
     def _verifier_mode(self):
         if paie_settings.get_mode(
@@ -120,6 +122,18 @@ class ModeSimpleService(ContextePaieMixin):
                     "mode": "SIMPLE",
                 },
             )
+        journaliser_paie(
+            action="echeance_creee_ou_mise_a_jour",
+            type_objet="EcheanceSalariale",
+            objet=echeance,
+            reference=echeance.periode,
+            acteur=self.acteur,
+            entreprise=self.entreprise,
+            donnees={
+                "montant_brut": str(echeance.montant_brut),
+                "montant_net": str(echeance.montant_net),
+            },
+        )
         return echeance
 
     def enregistrer_paiement(
@@ -265,6 +279,19 @@ class ModeSimpleService(ContextePaieMixin):
                 cle_idempotence=cle_idempotence,
                 compte_reference=compte_reference,
             )
+        journaliser_paie(
+            action="paiement_enregistre",
+            type_objet="PaiementSalarial",
+            objet=paiement,
+            reference=paiement.reference,
+            acteur=self.acteur,
+            entreprise=self.entreprise,
+            donnees={
+                "echeance_id": paiement.echeance_id,
+                "montant": str(paiement.montant),
+                "type_paiement": paiement.type_paiement,
+            },
+        )
         return paiement
 
     def _periode_suivante(self, mois, annee):
