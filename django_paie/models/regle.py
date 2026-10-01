@@ -1,8 +1,9 @@
 from django.db import models
 from django.db.models import Q
+from .entreprise import ContexteEntrepriseModel
 
 
-class ReglePaie(models.Model):
+class ReglePaie(ContexteEntrepriseModel):
     ORGANISME_CHOICES = [
         ("CNSS", "CNSS"),
         ("AMO", "AMO"),
@@ -27,22 +28,41 @@ class ReglePaie(models.Model):
         verbose_name_plural = "Règles de paie"
         constraints = [
             models.UniqueConstraint(
-                fields=["pays", "organisme", "version", "entreprise_id"],
+                fields=[
+                    "pays", "organisme", "version",
+                    "entreprise_source", "entreprise_reference",
+                ],
                 name="paie_regle_version_unique",
             )
         ]
         ordering = ["organisme", "-date_debut", "-version"]
 
     @classmethod
-    def pour_date(cls, organisme, date_calcul, entreprise_id="", pays="ML"):
+    def pour_date(
+        cls, organisme, date_calcul, entreprise_id="", pays="ML",
+        entreprise_source="", entreprise_reference=""
+    ):
         base = cls.objects.filter(
             organisme=organisme,
             pays=pays,
             actif=True,
             date_debut__lte=date_calcul,
         ).filter(Q(date_fin__isnull=True) | Q(date_fin__gte=date_calcul))
-        if entreprise_id:
-            specifique = base.filter(entreprise_id=entreprise_id).first()
+        if entreprise_reference:
+            specifique = base.filter(
+                entreprise_source=entreprise_source,
+                entreprise_reference=entreprise_reference,
+            ).first()
             if specifique:
                 return specifique
-        return base.filter(entreprise_id="").first()
+        elif entreprise_id:
+            specifique = base.filter(
+                entreprise_source="legacy",
+                entreprise_reference=str(entreprise_id),
+            ).first()
+            if specifique:
+                return specifique
+        return base.filter(
+            entreprise_source="",
+            entreprise_reference="",
+        ).first()
