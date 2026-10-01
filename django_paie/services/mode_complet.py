@@ -13,11 +13,13 @@ from ..models import EcheanceSalariale, PeriodePaie, RubriquePaie, ReglePaie
 from ..models.bulletin import BulletinPaie, LigneBulletin, CotisationBulletin, ValidationPaie
 from ..utils import extraire_mois_annee
 from .context import ContextePaieMixin
+from .audit import journaliser_paie
 
 
 class ModeCompletService(ContextePaieMixin):
-    def __init__(self, entreprise_id="", entreprise=None):
+    def __init__(self, entreprise_id="", entreprise=None, acteur=None):
         self._initialiser_contexte_entreprise(entreprise_id, entreprise)
+        self.acteur = acteur
 
     def _verifier_mode(self):
         if paie_settings.get_mode(
@@ -232,6 +234,20 @@ class ModeCompletService(ContextePaieMixin):
             notes=f"Bulletin créé pour {periode}",
         )
 
+        journaliser_paie(
+            action="bulletin_calcule",
+            type_objet="BulletinPaie",
+            objet=bulletin_model,
+            reference=periode,
+            acteur=self.acteur,
+            entreprise=self.entreprise,
+            donnees={
+                "echeance_id": echeance.pk,
+                "montant_brut": str(montant_brut),
+                "montant_net": str(montant_net),
+                "statut": bulletin_model.statut,
+            },
+        )
         return echeance
 
     def _creer_cotisations_bulletin(self, bulletin_model, bulletin_dataclass, salaire_brut):
