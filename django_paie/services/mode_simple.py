@@ -8,6 +8,7 @@ from ..conf import paie_settings
 from ..utils import extraire_mois_annee
 from .context import ContextePaieMixin
 from .audit import journaliser_paie
+from ..signals import paiement_paie_enregistre
 
 
 class ModeSimpleService(ContextePaieMixin):
@@ -279,6 +280,13 @@ class ModeSimpleService(ContextePaieMixin):
                 cle_idempotence=cle_idempotence,
                 compte_reference=compte_reference,
             )
+        paiement_paie_enregistre.send(
+            sender=PaiementSalarial,
+            paiement=paiement,
+            echeance=paiement.echeance,
+            user=self.acteur,
+            entreprise=self.entreprise,
+        )
         journaliser_paie(
             action="paiement_enregistre",
             type_objet="PaiementSalarial",
